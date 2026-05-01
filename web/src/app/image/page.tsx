@@ -21,6 +21,7 @@ import {
   createImageEditTask,
   createImageGenerationTask,
   fetchAccounts,
+  fetchAuthProfile,
   fetchImageTasks,
   type Account,
   type ImageTask,
@@ -74,6 +75,15 @@ function formatConversationTime(value: string) {
 function formatAvailableQuota(accounts: Account[]) {
   const availableAccounts = accounts.filter((account) => account.status !== "禁用");
   return String(availableAccounts.reduce((sum, account) => sum + Math.max(0, account.quota), 0));
+}
+
+function formatUserImageQuota(profile: { image_quota?: number; image_used?: number; image_remaining?: number | null }) {
+  const quota = Math.max(0, Number(profile.image_quota) || 0);
+  if (quota <= 0) {
+    return "不限";
+  }
+  const remaining = profile.image_remaining ?? Math.max(0, quota - Math.max(0, Number(profile.image_used) || 0));
+  return String(Math.max(0, Number(remaining) || 0));
 }
 
 function createId() {
@@ -423,13 +433,14 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   }, []);
 
   const loadQuota = useCallback(async () => {
-    if (!isAdmin) {
-      setAvailableQuota("--");
-      return;
-    }
     try {
-      const data = await fetchAccounts();
-      setAvailableQuota(formatAvailableQuota(data.items));
+      if (isAdmin) {
+        const data = await fetchAccounts();
+        setAvailableQuota(formatAvailableQuota(data.items));
+        return;
+      }
+      const profile = await fetchAuthProfile();
+      setAvailableQuota(formatUserImageQuota(profile));
     } catch {
       setAvailableQuota((prev) => (prev === "加载中..." ? "--" : prev));
     }
@@ -832,6 +843,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
             ),
           };
         });
+        await loadQuota();
         toast.error(message);
       } finally {
         activeConversationQueueIds.delete(conversationId);

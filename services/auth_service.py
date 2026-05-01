@@ -14,12 +14,23 @@ from services.storage.base import StorageBackend
 AuthRole = Literal["admin", "user"]
 
 
+class ImageQuotaExceeded(Exception):
+    pass
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
 def _hash_key(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _non_negative_int(value: object, default: int = 0) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
 
 
 class AuthService:
@@ -46,6 +57,8 @@ class AuthService:
         name = self._clean(raw.get("name")) or ("管理员密钥" if role == "admin" else "普通用户")
         created_at = self._clean(raw.get("created_at")) or _now_iso()
         last_used_at = self._clean(raw.get("last_used_at")) or None
+        image_quota = _non_negative_int(raw.get("image_quota"), 0)
+        image_used = min(_non_negative_int(raw.get("image_used"), 0), image_quota) if image_quota > 0 else _non_negative_int(raw.get("image_used"), 0)
         return {
             "id": item_id,
             "name": name,
@@ -54,6 +67,8 @@ class AuthService:
             "enabled": bool(raw.get("enabled", True)),
             "created_at": created_at,
             "last_used_at": last_used_at,
+            "image_quota": image_quota,
+            "image_used": image_used,
         }
 
     def _load(self) -> list[dict[str, object]]:
@@ -77,6 +92,8 @@ class AuthService:
             "enabled": bool(item.get("enabled", True)),
             "created_at": item.get("created_at"),
             "last_used_at": item.get("last_used_at"),
+            "image_quota": _non_negative_int(item.get("image_quota"), 0),
+            "image_used": _non_negative_int(item.get("image_used"), 0),
         }
 
     def list_keys(self, role: AuthRole | None = None) -> list[dict[str, object]]:
@@ -84,7 +101,7 @@ class AuthService:
             items = [item for item in self._items if role is None or item.get("role") == role]
             return [self._public_item(item) for item in items]
 
-    def create_key(self, *, role: AuthRole, name: str = "") -> tuple[dict[str, object], str]:
+    def create_key(self, *, role: AuthRole, name: str = "", image_quota: int = 0) -> tuple[dict[str, object], str]:
         normalized_name = self._clean(name) or ("管理员密钥" if role == "admin" else "普通用户")
         raw_key = f"sk-{secrets.token_urlsafe(24)}"
         item = {
@@ -95,6 +112,8 @@ class AuthService:
             "enabled": True,
             "created_at": _now_iso(),
             "last_used_at": None,
+            "image_quota": _non_negative_int(image_quota, 0),
+            "image_used": 0,
         }
         with self._lock:
             self._items.append(item)
@@ -122,10 +141,58 @@ class AuthService:
                     next_item["name"] = self._clean(updates.get("name")) or next_item.get("name") or "普通用户"
                 if "enabled" in updates and updates.get("enabled") is not None:
                     next_item["enabled"] = bool(updates.get("enabled"))
+                if "image_quota" in updates and updates.get("image_quota") is not None:
+                    image_quota = _non_negative_int(updates.get("image_quota"), 0)
+                    next_item["image_quota"] = image_quota
+                    if image_quota > 0:
+                        next_item["image_used"] = min(_non_negative_int(next_item.get("image_used"), 0), image_quota)
+                if "image_used" in updates and updates.get("image_used") is not None:
+                    image_quota = _non_negative_int(next_item.get("image_quota"), 0)
+                    image_used = _non_negative_int(updates.get("image_used"), 0)
+                    next_item["image_used"] = min(image_used, image_quota) if image_quota > 0 else image_used
                 self._items[index] = next_item
                 self._save()
                 return self._public_item(next_item)
         return None
+
+    def reserve_image_quota(self, identity: dict[str, object], amount: int = 1) -> bool:
+        if identity.get("role") != "user":
+            return False
+        normalized_id = self._clean(identity.get("id"))
+        amount = _non_negative_int(amount, 0)
+        if not normalized_id or amount <= 0:
+            return False
+        with self._lock:
+            for index, item in enumerate(self._items):
+                if item.get("id") != normalized_id or item.get("role") != "user":
+                    continue
+                quota = _non_negative_int(item.get("image_quota"), 0)
+                if quota <= 0:
+                    return False
+                used = _non_negative_int(item.get("image_used"), 0)
+                if used + amount > quota:
+                    raise ImageQuotaExceeded(f"图片生成额度已用完（已用 {used}/{quota}）")
+                next_item = dict(item)
+                next_item["image_used"] = used + amount
+                self._items[index] = next_item
+                self._save()
+                return True
+        return False
+
+    def refund_image_quota(self, owner_id: str, amount: int = 1) -> None:
+        normalized_id = self._clean(owner_id)
+        amount = _non_negative_int(amount, 0)
+        if not normalized_id or amount <= 0:
+            return
+        with self._lock:
+            for index, item in enumerate(self._items):
+                if item.get("id") != normalized_id or item.get("role") != "user":
+                    continue
+                next_item = dict(item)
+                next_item["image_used"] = max(0, _non_negative_int(item.get("image_used"), 0) - amount)
+                self._items[index] = next_item
+                self._save()
+                return
 
     def delete_key(self, key_id: str, *, role: AuthRole | None = None) -> bool:
         normalized_id = self._clean(key_id)

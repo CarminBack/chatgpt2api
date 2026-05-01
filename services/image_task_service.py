@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from services.auth_service import auth_service
 from services.config import DATA_DIR, config
 from services.protocol import openai_v1_image_edit, openai_v1_image_generations
 
@@ -177,6 +178,7 @@ class ImageTaskService:
                 if cleaned:
                     self._save_locked()
                 return _public_task(task)
+            quota_reserved = auth_service.reserve_image_quota(identity, 1)
             task = {
                 "id": task_id,
                 "owner_id": owner,
@@ -186,6 +188,7 @@ class ImageTaskService:
                 "size": _clean(payload.get("size")),
                 "created_at": now,
                 "updated_at": now,
+                "quota_reserved": quota_reserved,
             }
             self._tasks[key] = task
             self._save_locked()
@@ -214,6 +217,14 @@ class ImageTaskService:
                 raise RuntimeError(message)
             self._update_task(key, status=TASK_STATUS_SUCCESS, data=data, error="")
         except Exception as exc:
+            with self._lock:
+                task = self._tasks.get(key)
+                quota_reserved = bool(task and task.get("quota_reserved"))
+                owner_id = _clean(task.get("owner_id")) if task else ""
+                if task is not None:
+                    task["quota_reserved"] = False
+            if quota_reserved:
+                auth_service.refund_image_quota(owner_id, 1)
             self._update_task(key, status=TASK_STATUS_ERROR, error=str(exc) or "image task failed", data=[])
 
     def _update_task(self, key: str, **updates: Any) -> None:
@@ -255,6 +266,7 @@ class ImageTaskService:
                 "size": _clean(item.get("size")),
                 "created_at": _clean(item.get("created_at"), _now_iso()),
                 "updated_at": _clean(item.get("updated_at"), _clean(item.get("created_at"), _now_iso())),
+                "quota_reserved": bool(item.get("quota_reserved", False)),
             }
             data = item.get("data")
             if isinstance(data, list):
@@ -275,6 +287,9 @@ class ImageTaskService:
         changed = False
         for task in self._tasks.values():
             if task.get("status") in UNFINISHED_STATUSES:
+                if task.get("quota_reserved"):
+                    auth_service.refund_image_quota(_clean(task.get("owner_id")), 1)
+                    task["quota_reserved"] = False
                 task["status"] = TASK_STATUS_ERROR
                 task["error"] = "服务已重启，未完成的图片任务已中断"
                 task["updated_at"] = _now_iso()

@@ -106,6 +106,9 @@ export type LoginResponse = {
   role: AuthRole;
   subject_id: string;
   name: string;
+  image_quota: number;
+  image_used: number;
+  image_remaining: number | null;
 };
 
 export type UserKey = {
@@ -115,6 +118,8 @@ export type UserKey = {
   enabled: boolean;
   created_at: string | null;
   last_used_at: string | null;
+  image_quota: number;
+  image_used: number;
 };
 
 export type RegisterConfig = {
@@ -165,6 +170,10 @@ export async function login(authKey: string) {
     },
     redirectOnUnauthorized: false,
   });
+}
+
+export async function fetchAuthProfile() {
+  return httpRequest<LoginResponse>("/auth/me");
 }
 
 export async function fetchAccounts() {
@@ -334,14 +343,14 @@ export async function fetchUserKeys() {
   return httpRequest<{ items: UserKey[] }>("/api/auth/users");
 }
 
-export async function createUserKey(name: string) {
+export async function createUserKey(name: string, imageQuota = 0) {
   return httpRequest<{ item: UserKey; key: string; items: UserKey[] }>("/api/auth/users", {
     method: "POST",
-    body: { name },
+    body: { name, image_quota: imageQuota },
   });
 }
 
-export async function updateUserKey(keyId: string, updates: { enabled?: boolean; name?: string }) {
+export async function updateUserKey(keyId: string, updates: { enabled?: boolean; name?: string; image_quota?: number; image_used?: number }) {
   return httpRequest<{ item: UserKey; items: UserKey[] }>(`/api/auth/users/${keyId}`, {
     method: "POST",
     body: updates,

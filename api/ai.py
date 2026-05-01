@@ -5,6 +5,7 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 
 from api.support import require_identity, resolve_image_base_url
+from services.auth_service import ImageQuotaExceeded, auth_service
 from services.log_service import LoggedCall
 from services.protocol import (
     anthropic_v1_messages,
@@ -56,6 +57,21 @@ class AnthropicMessageRequest(BaseModel):
 def create_router() -> APIRouter:
     router = APIRouter()
 
+    async def run_image_call_with_quota(identity: dict[str, object], amount: int, call: LoggedCall, handler, payload):
+        quota_reserved = False
+        try:
+            quota_reserved = auth_service.reserve_image_quota(identity, amount)
+            result = await call.run(handler, payload)
+            if quota_reserved and getattr(result, "status_code", 200) >= 400:
+                auth_service.refund_image_quota(str(identity.get("id") or ""), amount)
+            return result
+        except ImageQuotaExceeded as exc:
+            raise HTTPException(status_code=429, detail={"error": str(exc)}) from exc
+        except Exception:
+            if quota_reserved:
+                auth_service.refund_image_quota(str(identity.get("id") or ""), amount)
+            raise
+
     @router.get("/v1/models")
     async def list_models(authorization: str | None = Header(default=None)):
         require_identity(authorization)
@@ -74,7 +90,7 @@ def create_router() -> APIRouter:
         payload = body.model_dump(mode="python")
         payload["base_url"] = resolve_image_base_url(request)
         call = LoggedCall(identity, "/v1/images/generations", body.model, "文生图")
-        return await call.run(openai_v1_image_generations.handle, payload)
+        return await run_image_call_with_quota(identity, body.n, call, openai_v1_image_generations.handle, payload)
 
     @router.post("/v1/images/edits")
     async def edit_images(
@@ -112,7 +128,7 @@ def create_router() -> APIRouter:
             "base_url": resolve_image_base_url(request),
         }
         call = LoggedCall(identity, "/v1/images/edits", model, "图生图")
-        return await call.run(openai_v1_image_edit.handle, payload)
+        return await run_image_call_with_quota(identity, n, call, openai_v1_image_edit.handle, payload)
 
     @router.post("/v1/chat/completions")
     async def create_chat_completion(body: ChatCompletionRequest, authorization: str | None = Header(default=None)):

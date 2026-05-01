@@ -26,19 +26,34 @@ class ImageDeleteRequest(BaseModel):
     all_matching: bool = False
 
 
+def _auth_identity_payload(identity: dict[str, object], app_version: str) -> dict[str, object]:
+    image_quota = max(0, int(identity.get("image_quota") or 0))
+    image_used = max(0, int(identity.get("image_used") or 0))
+    image_remaining = max(0, image_quota - image_used) if image_quota > 0 else None
+    return {
+        "ok": True,
+        "version": app_version,
+        "role": identity.get("role"),
+        "subject_id": identity.get("id"),
+        "name": identity.get("name"),
+        "image_quota": image_quota,
+        "image_used": image_used,
+        "image_remaining": image_remaining,
+    }
+
+
 def create_router(app_version: str) -> APIRouter:
     router = APIRouter()
 
     @router.post("/auth/login")
     async def login(authorization: str | None = Header(default=None)):
         identity = require_identity(authorization)
-        return {
-            "ok": True,
-            "version": app_version,
-            "role": identity.get("role"),
-            "subject_id": identity.get("id"),
-            "name": identity.get("name"),
-        }
+        return _auth_identity_payload(identity, app_version)
+
+    @router.get("/auth/me")
+    async def get_current_identity(authorization: str | None = Header(default=None)):
+        identity = require_identity(authorization)
+        return _auth_identity_payload(identity, app_version)
 
     @router.get("/version")
     async def get_version():
