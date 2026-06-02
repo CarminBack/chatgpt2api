@@ -11,6 +11,7 @@ import {
   CircleOff,
   Copy,
   Download,
+  Link2,
   LoaderCircle,
   Pencil,
   RefreshCw,
@@ -43,25 +44,18 @@ import {
 import {
   deleteAccounts,
   fetchAccounts,
+  fetchModels,
   refreshAccounts,
+  testProxy,
   updateAccount,
   type Account,
   type AccountStatus,
-  type AccountType,
+  type Model,
 } from "@/lib/api";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 import { cn } from "@/lib/utils";
 
 import { AccountImportDialog } from "./components/account-import-dialog";
-
-const accountTypeOptions: { label: string; value: AccountType | "all" }[] = [
-  { label: "全部类型", value: "all" },
-  { label: "Free", value: "Free" },
-  { label: "Plus", value: "Plus" },
-  { label: "ProLite", value: "ProLite" },
-  { label: "Team", value: "Team" },
-  { label: "Pro", value: "Pro" },
-];
 
 const accountStatusOptions: { label: string; value: AccountStatus | "all" }[] = [
   { label: "全部状态", value: "all" },
@@ -94,7 +88,11 @@ const metricCards = [
 ] as const;
 
 function isUnlimitedImageQuotaAccount(account: Account) {
-  return account.type === "Pro" || account.type === "ProLite";
+  return account.type === "pro" || account.type === "prolite";
+}
+
+function imageQuotaUnknown(account: Account) {
+  return Boolean(account.image_quota_unknown);
 }
 
 function formatCompact(value: number) {
@@ -108,7 +106,7 @@ function formatQuota(account: Account) {
   if (isUnlimitedImageQuotaAccount(account)) {
     return "∞";
   }
-  if (account.imageQuotaUnknown) {
+  if (imageQuotaUnknown(account)) {
     return "未知";
   }
   return String(Math.max(0, account.quota));
@@ -143,7 +141,7 @@ function formatQuotaSummary(accounts: Account[]) {
   if (availableAccounts.some(isUnlimitedImageQuotaAccount)) {
     return "∞";
   }
-  if (availableAccounts.some((account) => account.imageQuotaUnknown)) {
+  if (availableAccounts.some(imageQuotaUnknown)) {
     return "未知";
   }
   return formatCompact(availableAccounts.reduce((sum, account) => sum + Math.max(0, account.quota), 0));
@@ -166,34 +164,37 @@ function downloadTokens(accounts: Account[]) {
   URL.revokeObjectURL(url);
 }
 
-function normalizeAccounts(items: Account[]): Account[] {
-  return items.map((item) => ({
-    ...item,
-    type:
-      item.type === "Plus" ||
-      item.type === "ProLite" ||
-      item.type === "Team" ||
-      item.type === "Pro" ||
-      item.type === "Free"
-        ? item.type
-        : "Free",
-  }));
+function displayAccountType(account: Account) {
+  return account.type || "Free";
+}
+
+function displayAccountSource(account: Account) {
+  const source = String(account.source_type || "").trim().toLowerCase();
+  if (!source) {
+    return "web";
+  }
+  if (source === "web") {
+    return "web";
+  }
+  return source;
 }
 
 function AccountsPageContent() {
   const didLoadRef = useRef(false);
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [availableModels, setAvailableModels] = useState<Model[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [query, setQuery] = useState("");
-  const [typeFilter, setTypeFilter] = useState<AccountType | "all">("all");
+  const [typeFilter, setTypeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<AccountStatus | "all">("all");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState("10");
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
-  const [editType, setEditType] = useState<AccountType>("Free");
   const [editStatus, setEditStatus] = useState<AccountStatus>("正常");
-  const [editQuota, setEditQuota] = useState("0");
+  const [editProxy, setEditProxy] = useState("");
+  const [isTestingProxy, setIsTestingProxy] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingModels, setIsLoadingModels] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
@@ -204,8 +205,8 @@ function AccountsPageContent() {
     }
     try {
       const data = await fetchAccounts();
-      setAccounts(normalizeAccounts(data.items));
-      setSelectedIds((prev) => prev.filter((id) => data.items.some((item) => item.id === id)));
+      setAccounts(data.items);
+      setSelectedIds((prev) => prev.filter((id) => data.items.some((item) => item.access_token === id)));
     } catch (error) {
       const message = error instanceof Error ? error.message : "加载账户失败";
       toast.error(message);
@@ -216,12 +217,26 @@ function AccountsPageContent() {
     }
   };
 
+  const loadModels = async () => {
+    setIsLoadingModels(true);
+    try {
+      const data = await fetchModels();
+      setAvailableModels(Array.isArray(data.data) ? data.data : []);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "加载模型列表失败";
+      toast.error(message);
+    } finally {
+      setIsLoadingModels(false);
+    }
+  };
+
   useEffect(() => {
     if (didLoadRef.current) {
       return;
     }
     didLoadRef.current = true;
     void loadAccounts();
+    void loadModels();
   }, []);
 
   const filteredAccounts = useMemo(() => {
@@ -229,7 +244,7 @@ function AccountsPageContent() {
     return accounts.filter((account) => {
       const searchMatched =
         normalizedQuery.length === 0 || (account.email ?? "").toLowerCase().includes(normalizedQuery);
-      const typeMatched = typeFilter === "all" || account.type === typeFilter;
+      const typeMatched = typeFilter === "all" || displayAccountType(account) === typeFilter;
       const statusMatched = statusFilter === "all" || account.status === statusFilter;
       return searchMatched && typeMatched && statusMatched;
     });
@@ -240,7 +255,7 @@ function AccountsPageContent() {
   const startIndex = (safePage - 1) * Number(pageSize);
   const currentRows = filteredAccounts.slice(startIndex, startIndex + Number(pageSize));
   const allCurrentSelected =
-    currentRows.length > 0 && currentRows.every((row) => selectedIds.includes(row.id));
+    currentRows.length > 0 && currentRows.every((row) => selectedIds.includes(row.access_token));
 
   const summary = useMemo(() => {
     const total = accounts.length;
@@ -253,9 +268,17 @@ function AccountsPageContent() {
     return { total, active, limited, abnormal, disabled, quota };
   }, [accounts]);
 
+  const accountTypeOptions = useMemo(
+    () => [
+      { label: "全部类型", value: "all" },
+      ...Array.from(new Set(accounts.map(displayAccountType))).map((type) => ({ label: type, value: type })),
+    ],
+    [accounts],
+  );
+
   const selectedTokens = useMemo(() => {
     const selectedSet = new Set(selectedIds);
-    return accounts.filter((item) => selectedSet.has(item.id)).map((item) => item.access_token);
+    return accounts.filter((item) => selectedSet.has(item.access_token)).map((item) => item.access_token);
   }, [accounts, selectedIds]);
 
   const abnormalTokens = useMemo(() => {
@@ -285,8 +308,8 @@ function AccountsPageContent() {
     setIsDeleting(true);
     try {
       const data = await deleteAccounts(tokens);
-      setAccounts(normalizeAccounts(data.items));
-      setSelectedIds((prev) => prev.filter((id) => data.items.some((item) => item.id === id)));
+      setAccounts(data.items);
+      setSelectedIds((prev) => prev.filter((id) => data.items.some((item) => item.access_token === id)));
       toast.success(`删除 ${data.removed ?? 0} 个账户`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "删除账户失败";
@@ -305,8 +328,8 @@ function AccountsPageContent() {
     setIsRefreshing(true);
     try {
       const data = await refreshAccounts(accessTokens);
-      setAccounts(normalizeAccounts(data.items));
-      setSelectedIds((prev) => prev.filter((id) => data.items.some((item) => item.id === id)));
+      setAccounts(data.items);
+      setSelectedIds((prev) => prev.filter((id) => data.items.some((item) => item.access_token === id)));
       if (data.errors.length > 0) {
         const firstError = data.errors[0]?.error;
         toast.error(
@@ -325,9 +348,27 @@ function AccountsPageContent() {
 
   const openEditDialog = (account: Account) => {
     setEditingAccount(account);
-    setEditType(account.type);
     setEditStatus(account.status);
-    setEditQuota(String(account.quota));
+    setEditProxy(account.proxy ?? "");
+  };
+
+  const handleTestAccountProxy = async () => {
+    const candidate = editProxy.trim();
+    if (!candidate) {
+      toast.error("请先填写代理地址");
+      return;
+    }
+    setIsTestingProxy(true);
+    try {
+      const data = await testProxy(candidate);
+      data.result.ok
+        ? toast.success(`代理可用（${data.result.latency_ms} ms，HTTP ${data.result.status}）`)
+        : toast.error(`代理不可用：${data.result.error ?? "未知错误"}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "测试代理失败");
+    } finally {
+      setIsTestingProxy(false);
+    }
   };
 
   const handleUpdateAccount = async () => {
@@ -338,12 +379,11 @@ function AccountsPageContent() {
     setIsUpdating(true);
     try {
       const data = await updateAccount(editingAccount.access_token, {
-        type: editType,
         status: editStatus,
-        quota: Number(editQuota || 0),
+        proxy: editProxy.trim(),
       });
-      setAccounts(normalizeAccounts(data.items));
-      setSelectedIds((prev) => prev.filter((id) => data.items.some((item) => item.id === id)));
+      setAccounts(data.items);
+      setSelectedIds((prev) => prev.filter((id) => data.items.some((item) => item.access_token === id)));
       setEditingAccount(null);
       toast.success("账号信息已更新");
     } catch (error) {
@@ -356,10 +396,10 @@ function AccountsPageContent() {
 
   const toggleSelectAll = (checked: boolean) => {
     if (checked) {
-      setSelectedIds((prev) => Array.from(new Set([...prev, ...currentRows.map((item) => item.id)])));
+      setSelectedIds((prev) => Array.from(new Set([...prev, ...currentRows.map((item) => item.access_token)])));
       return;
     }
-    setSelectedIds((prev) => prev.filter((id) => !currentRows.some((row) => row.id === id)));
+    setSelectedIds((prev) => prev.filter((id) => !currentRows.some((row) => row.access_token === id)));
   };
 
   return (
@@ -394,7 +434,7 @@ function AccountsPageContent() {
           <AccountImportDialog
             disabled={isLoading || isRefreshing || isDeleting}
             onImported={(items) => {
-              setAccounts(normalizeAccounts(items));
+              setAccounts(items);
               setSelectedIds([]);
               setPage(1);
             }}
@@ -416,7 +456,7 @@ function AccountsPageContent() {
           <DialogHeader className="gap-2">
             <DialogTitle>编辑账户</DialogTitle>
             <DialogDescription className="text-sm leading-6">
-              手动修改账号状态、类型和额度。
+              手动修改账号状态和专属代理。
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -438,29 +478,24 @@ function AccountsPageContent() {
               </Select>
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium text-stone-700">类型</label>
-              <Select value={editType} onValueChange={(value) => setEditType(value as AccountType)}>
-                <SelectTrigger className="h-11 rounded-xl border-stone-200 bg-white">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {accountTypeOptions
-                    .filter((option) => option.value !== "all")
-                    .map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-stone-700">额度</label>
-              <Input
-                value={editQuota}
-                onChange={(event) => setEditQuota(event.target.value)}
-                className="h-11 rounded-xl border-stone-200 bg-white"
-              />
+              <label className="text-sm font-medium text-stone-700">账号代理</label>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Input
+                  value={editProxy}
+                  onChange={(event) => setEditProxy(event.target.value)}
+                  placeholder="留空走全局代理，例如 http://127.0.0.1:7890"
+                  className="h-11 rounded-xl border-stone-200 bg-white"
+                />
+                <Button
+                  variant="outline"
+                  className="h-11 rounded-xl border-stone-200 bg-white px-4 text-stone-700 sm:w-24"
+                  onClick={() => void handleTestAccountProxy()}
+                  disabled={isTestingProxy}
+                >
+                  {isTestingProxy ? <LoaderCircle className="size-4 animate-spin" /> : <Link2 className="size-4" />}
+                  测试
+                </Button>
+              </div>
             </div>
           </div>
           <DialogFooter className="pt-2">
@@ -506,6 +541,42 @@ function AccountsPageContent() {
             );
           })}
         </div>
+        <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
+          <CardContent className="p-4">
+            <div className="mb-3 text-sm font-medium text-stone-700">
+              系统可用模型
+              <span className="ml-1 text-stone-400">({availableModels.length})</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {availableModels.length > 0 ? (
+                availableModels.map((model) => (
+                  <button
+                    key={model.id}
+                    type="button"
+                    className="inline-flex cursor-pointer items-center rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-medium text-stone-700 transition hover:border-stone-300 hover:bg-stone-50"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(model.id);
+                      toast.success("模型名已复制");
+                    }}
+                    title={`点击复制 ${model.id}`}
+                  >
+                    <img
+                      src="/openai.svg"
+                      alt=""
+                      aria-hidden="true"
+                      className="mr-1.5 size-3.5 shrink-0"
+                    />
+                    {model.id}
+                  </button>
+                ))
+              ) : isLoadingModels ? (
+                <span className="text-sm text-stone-400">正在加载模型列表...</span>
+              ) : (
+                <span className="text-sm text-stone-400">当前暂无可用模型</span>
+              )}
+            </div>
+          </CardContent>
+        </Card>
       </section>
 
       <section className="space-y-4">
@@ -533,7 +604,7 @@ function AccountsPageContent() {
             <Select
               value={typeFilter}
               onValueChange={(value) => {
-                setTypeFilter(value as AccountType | "all");
+                setTypeFilter(value);
                 setPage(1);
               }}
             >
@@ -628,7 +699,7 @@ function AccountsPageContent() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[920px] text-left">
+              <table className="w-full min-w-[1000px] text-left">
                 <thead className="border-b border-stone-100 text-[11px] text-stone-400 uppercase tracking-[0.18em]">
                   <tr>
                     <th className="w-12 px-4 py-3">
@@ -639,8 +710,10 @@ function AccountsPageContent() {
                     </th>
                     <th className="w-56 px-4 py-3">token</th>
                     <th className="w-28 px-4 py-3">类型</th>
+                    <th className="w-24 px-4 py-3">来源</th>
                     <th className="w-24 px-4 py-3">状态</th>
                     <th className="w-56 px-4 py-3">账号信息</th>
+                    <th className="w-32 px-4 py-3">创建时间</th>
                     <th className="w-24 px-4 py-3">额度</th>
                     <th className="w-40 px-4 py-3">恢复时间</th>
                     <th className="w-18 px-4 py-3">成功</th>
@@ -655,17 +728,17 @@ function AccountsPageContent() {
 
                     return (
                       <tr
-                        key={account.id}
+                        key={account.access_token}
                         className="border-b border-stone-100/80 text-sm text-stone-600 transition-colors hover:bg-stone-50/70"
                       >
                         <td className="px-4 py-3">
                           <Checkbox
-                            checked={selectedIds.includes(account.id)}
+                            checked={selectedIds.includes(account.access_token)}
                             onCheckedChange={(checked) => {
                               setSelectedIds((prev) =>
                                 checked
-                                  ? Array.from(new Set([...prev, account.id]))
-                                  : prev.filter((item) => item !== account.id),
+                                  ? Array.from(new Set([...prev, account.access_token]))
+                                  : prev.filter((item) => item !== account.access_token),
                               );
                             }}
                           />
@@ -689,7 +762,12 @@ function AccountsPageContent() {
                         </td>
                         <td className="px-4 py-3">
                           <Badge variant="secondary" className="rounded-md bg-stone-100 text-stone-700">
-                            {account.type}
+                            {displayAccountType(account)}
+                          </Badge>
+                        </td>
+                        <td className="px-4 py-3">
+                          <Badge variant="outline" className="rounded-md border-stone-200 text-stone-600">
+                            {displayAccountSource(account)}
                           </Badge>
                         </td>
                         <td className="px-4 py-3">
@@ -704,6 +782,17 @@ function AccountsPageContent() {
                         <td className="px-4 py-3">
                           <div className="text-xs leading-5 text-stone-500">{account.email ?? "—"}</div>
                         </td>
+                        <td className="px-4 py-3 text-xs leading-5 text-stone-500">
+                          {(() => {
+                            const raw = (account as any).created_at;
+                            if (!raw) return "—";
+                            try {
+                              const d = new Date(raw + "Z");
+                              if (isNaN(d.getTime())) return String(raw).slice(0, 10);
+                              return d.toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+                            } catch { return String(raw).slice(0, 10); }
+                          })()}
+                        </td>
                         <td className="px-4 py-3">
                           <Badge variant="info" className="rounded-md">
                             {formatQuota(account)}
@@ -711,7 +800,7 @@ function AccountsPageContent() {
                         </td>
                         <td className="px-4 py-3 text-xs leading-5 text-stone-500">
                           {(() => {
-                            const restore = formatRestoreAt(account.restoreAt);
+                            const restore = formatRestoreAt(account.restore_at);
                             return (
                               <div className="space-y-0.5">
                                 {restore.relative ? <div className="font-medium text-stone-700">{restore.relative}</div> : null}

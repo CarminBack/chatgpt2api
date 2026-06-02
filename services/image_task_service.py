@@ -10,6 +10,8 @@ from typing import Any
 
 from services.auth_service import auth_service
 from services.config import DATA_DIR, config
+from services.content_filter import request_text
+from services.log_service import LOG_TYPE_CALL, log_service
 from services.protocol import openai_v1_image_edit, openai_v1_image_generations
 
 TASK_STATUS_QUEUED = "queued"
@@ -50,6 +52,16 @@ def _task_key(owner_id: str, task_id: str) -> str:
     return f"{owner_id}:{task_id}"
 
 
+def _collect_image_urls(data: list[Any]) -> list[str]:
+    urls: list[str] = []
+    for item in data:
+        if isinstance(item, dict):
+            url = item.get("url")
+            if isinstance(url, str) and url:
+                urls.append(url)
+    return urls
+
+
 def _public_task(task: dict[str, Any]) -> dict[str, Any]:
     item = {
         "id": task.get("id"),
@@ -57,11 +69,14 @@ def _public_task(task: dict[str, Any]) -> dict[str, Any]:
         "mode": task.get("mode"),
         "model": task.get("model"),
         "size": task.get("size"),
+        "quality": task.get("quality"),
         "created_at": task.get("created_at"),
         "updated_at": task.get("updated_at"),
     }
     if task.get("data") is not None:
         item["data"] = task.get("data")
+    if task.get("usage") is not None:
+        item["usage"] = task.get("usage")
     if task.get("error"):
         item["error"] = task.get("error")
     return item
@@ -98,13 +113,15 @@ class ImageTaskService:
         prompt: str,
         model: str,
         size: str | None,
-        base_url: str,
+        quality: str = "auto",
+        base_url: str = "",
     ) -> dict[str, Any]:
         payload = {
             "prompt": prompt,
             "model": model,
             "n": 1,
             "size": size,
+            "quality": quality,
             "response_format": "url",
             "base_url": base_url,
         }
@@ -118,15 +135,17 @@ class ImageTaskService:
         prompt: str,
         model: str,
         size: str | None,
-        base_url: str,
-        images: list[tuple[bytes, str, str]],
+        quality: str = "auto",
+        base_url: str = "",
+        images: list[tuple[bytes, str, str]] | None = None,
     ) -> dict[str, Any]:
         payload = {
             "prompt": prompt,
-            "images": images,
+            "images": images or [],
             "model": model,
             "n": 1,
             "size": size,
+            "quality": quality,
             "response_format": "url",
             "base_url": base_url,
         }
@@ -186,6 +205,7 @@ class ImageTaskService:
                 "mode": mode,
                 "model": _clean(payload.get("model"), "gpt-image-2"),
                 "size": _clean(payload.get("size")),
+                "quality": _clean(payload.get("quality"), "auto"),
                 "created_at": now,
                 "updated_at": now,
                 "quota_reserved": quota_reserved,
@@ -197,14 +217,22 @@ class ImageTaskService:
         if should_start:
             thread = threading.Thread(
                 target=self._run_task,
-                args=(key, mode, payload),
+                args=(key, mode, payload, dict(identity), _clean(payload.get("model"), "gpt-image-2")),
                 name=f"image-task-{task_id[:16]}",
                 daemon=True,
             )
             thread.start()
         return _public_task(task)
 
-    def _run_task(self, key: str, mode: str, payload: dict[str, Any]) -> None:
+    def _run_task(
+        self,
+        key: str,
+        mode: str,
+        payload: dict[str, Any],
+        identity: dict[str, object],
+        model: str,
+    ) -> None:
+        started = time.time()
         self._update_task(key, status=TASK_STATUS_RUNNING, error="")
         try:
             handler = self.edit_handler if mode == "edit" else self.generation_handler
@@ -212,10 +240,29 @@ class ImageTaskService:
             if not isinstance(result, dict):
                 raise RuntimeError("image task returned streaming result unexpectedly")
             data = result.get("data")
+            account_email = _clean(result.get("_account_email") or result.get("account_email"))
             if not isinstance(data, list) or not data:
-                message = _clean(result.get("message")) or "image task returned no image data"
-                raise RuntimeError(message)
-            self._update_task(key, status=TASK_STATUS_SUCCESS, data=data, error="")
+                upstream = _clean(result.get("message"))
+                if upstream:
+                    message = upstream
+                else:
+                    message = "号池中没有可用账号或所有账号均被限流，请检查号池状态（账号额度、是否被封禁、是否到达生图上限）"
+                error = RuntimeError(message)
+                if account_email:
+                    setattr(error, "account_email", account_email)
+                raise error
+            usage = result.get("usage")
+            self._update_task(key, status=TASK_STATUS_SUCCESS, data=data, usage=usage, error="")
+            self._log_call(
+                identity,
+                mode,
+                model,
+                started,
+                "调用完成",
+                request_preview=request_text(payload.get("prompt")),
+                urls=_collect_image_urls(data),
+                account_email=account_email,
+            )
         except Exception as exc:
             with self._lock:
                 task = self._tasks.get(key)
@@ -225,7 +272,60 @@ class ImageTaskService:
                     task["quota_reserved"] = False
             if quota_reserved:
                 auth_service.refund_image_quota(owner_id, 1)
-            self._update_task(key, status=TASK_STATUS_ERROR, error=str(exc) or "image task failed", data=[])
+            error_message = str(exc) or "image task failed"
+            account_email = _clean(getattr(exc, "account_email", ""))
+            self._update_task(key, status=TASK_STATUS_ERROR, error=error_message, data=[])
+            self._log_call(
+                identity,
+                mode,
+                model,
+                started,
+                "调用失败",
+                request_preview=request_text(payload.get("prompt")),
+                status="failed",
+                error=error_message,
+                account_email=account_email,
+            )
+
+    def _log_call(
+        self,
+        identity: dict[str, object],
+        mode: str,
+        model: str,
+        started: float,
+        suffix: str,
+        *,
+        request_preview: str = "",
+        status: str = "success",
+        error: str = "",
+        urls: list[str] | None = None,
+        account_email: str = "",
+    ) -> None:
+        endpoint = "/v1/images/edits" if mode == "edit" else "/v1/images/generations"
+        summary_prefix = "图生图" if mode == "edit" else "文生图"
+        detail = {
+            "key_id": identity.get("id"),
+            "key_name": identity.get("name"),
+            "role": identity.get("role"),
+            "endpoint": endpoint,
+            "model": model,
+            "started_at": datetime.fromtimestamp(started).strftime("%Y-%m-%d %H:%M:%S"),
+            "ended_at": _now_iso(),
+            "duration_ms": int((time.time() - started) * 1000),
+            "status": status,
+        }
+        if request_preview:
+            detail["request_text"] = request_preview
+        if error:
+            detail["error"] = error
+        if account_email:
+            detail["account_email"] = account_email
+        if urls:
+            detail["urls"] = list(dict.fromkeys(urls))
+        try:
+            log_service.add(LOG_TYPE_CALL, f"{summary_prefix}{suffix}", detail)
+        except Exception:
+            pass
 
     def _update_task(self, key: str, **updates: Any) -> None:
         with self._lock:
@@ -264,6 +364,7 @@ class ImageTaskService:
                 "mode": "edit" if item.get("mode") == "edit" else "generate",
                 "model": _clean(item.get("model"), "gpt-image-2"),
                 "size": _clean(item.get("size")),
+                "quality": _clean(item.get("quality"), "auto"),
                 "created_at": _clean(item.get("created_at"), _now_iso()),
                 "updated_at": _clean(item.get("updated_at"), _clean(item.get("created_at"), _now_iso())),
                 "quota_reserved": bool(item.get("quota_reserved", False)),
@@ -271,6 +372,9 @@ class ImageTaskService:
             data = item.get("data")
             if isinstance(data, list):
                 task["data"] = data
+            usage = item.get("usage")
+            if isinstance(usage, dict):
+                task["usage"] = usage
             error = _clean(item.get("error"))
             if error:
                 task["error"] = error

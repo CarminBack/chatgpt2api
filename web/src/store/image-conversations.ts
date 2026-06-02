@@ -32,10 +32,15 @@ export type ImageTurn = {
   referenceImages: StoredReferenceImage[];
   count: number;
   size: string;
+  ratio: string;
+  tier: string;
+  quality: string;
   images: StoredImage[];
   createdAt: string;
   status: ImageTurnStatus;
   error?: string;
+  promptDeleted?: boolean;
+  resultsDeleted?: boolean;
 };
 
 export type ImageConversation = {
@@ -134,6 +139,9 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
     referenceImages: getLegacyReferenceImages(turn),
     count: Math.max(1, Number(turn.count || normalizedImages.length || 1)),
     size: typeof turn.size === "string" ? turn.size : "",
+    ratio: typeof turn.ratio === "string" && turn.ratio ? turn.ratio : "1:1",
+    tier: typeof turn.tier === "string" && turn.tier ? turn.tier : "1k",
+    quality: typeof turn.quality === "string" && turn.quality ? turn.quality : "auto",
     images: normalizedImages,
     createdAt: String(turn.createdAt || new Date().toISOString()),
     status:
@@ -144,6 +152,8 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
         ? turn.status
         : derivedStatus,
     error: typeof turn.error === "string" ? turn.error : undefined,
+    promptDeleted: turn.promptDeleted === true,
+    resultsDeleted: turn.resultsDeleted === true,
   };
 }
 
@@ -159,6 +169,9 @@ function normalizeConversation(conversation: ImageConversation & Record<string, 
           referenceImages: getLegacyReferenceImages(conversation),
           count: Number(conversation.count || 1),
           size: typeof conversation.size === "string" ? conversation.size : "",
+          ratio: typeof conversation.ratio === "string" && conversation.ratio ? conversation.ratio : "1:1",
+          tier: typeof conversation.tier === "string" && conversation.tier ? conversation.tier : "1k",
+          quality: typeof conversation.quality === "string" && conversation.quality ? conversation.quality : "auto",
           images: Array.isArray(conversation.images) ? (conversation.images as StoredImage[]) : [],
           createdAt: String(conversation.createdAt || new Date().toISOString()),
           status:
@@ -242,6 +255,20 @@ export async function saveImageConversation(conversation: ImageConversation): Pr
   });
 }
 
+export async function renameImageConversation(id: string, title: string): Promise<void> {
+  await queueImageConversationWrite(async () => {
+    const items = await readStoredImageConversations();
+    const target = items.find((item) => item.id === id);
+    if (!target) return;
+    const updated = { ...target, title, updatedAt: new Date().toISOString() };
+    const nextItems = sortImageConversations([
+      updated,
+      ...items.filter((item) => item.id !== id),
+    ]);
+    await imageConversationStorage.setItem(IMAGE_CONVERSATIONS_KEY, nextItems);
+  });
+}
+
 export async function deleteImageConversation(id: string): Promise<void> {
   await queueImageConversationWrite(async () => {
     const items = await readStoredImageConversations();
@@ -265,6 +292,9 @@ export function getImageConversationStats(conversation: ImageConversation | null
 
   return conversation.turns.reduce(
     (acc, turn) => {
+      if (turn.resultsDeleted) {
+        return acc;
+      }
       if (turn.status === "queued") {
         acc.queued += 1;
       } else if (turn.status === "generating") {
