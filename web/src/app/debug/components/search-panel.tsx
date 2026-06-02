@@ -21,17 +21,6 @@ const normalizeMarkdown = (text: string) =>
 
 const cleanUrl = (url: string) => url.replace(/[\ue200-\ue202].*$/g, "").trim();
 
-const sourceKind = (url: string) => {
-  const host = (() => {
-    try {
-      return new URL(url).hostname;
-    } catch {
-      return "";
-    }
-  })();
-  return host.includes("github.com") ? "github" : "web";
-};
-
 function MarkdownResult({ content }: { content: string }) {
   return (
     <ReactMarkdown
@@ -145,11 +134,10 @@ export function SearchPanel() {
                 <div className="divide-y divide-stone-200 dark:divide-white/10">
                   {result.sources.map((source, index) => {
                     const url = cleanUrl(source.url || "");
-                    const kind = sourceKind(url);
                     return (
                       <a key={`${url || index}`} href={url} target="_blank" rel="noreferrer" className="flex gap-3 py-3 text-xs transition hover:text-stone-950 dark:hover:text-stone-50">
                         <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center text-stone-600 dark:text-stone-300">
-                          {kind === "github" ? <img src="/github.svg" alt="" aria-hidden="true" className="size-3.5 dark:invert" /> : <Globe2 className="size-3.5" />}
+                          <Globe2 className="size-3.5" />
                         </span>
                         <span className="min-w-0">
                           <span className="line-clamp-2 font-medium leading-5 text-stone-800 dark:text-stone-200">{source.title || url || "source"}</span>
