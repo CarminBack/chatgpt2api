@@ -261,6 +261,27 @@ class ConfigStore:
             return 5
 
     @property
+    def account_full_refresh_enabled(self) -> bool:
+        value = self.data.get("account_full_refresh_enabled", True)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    @property
+    def account_full_refresh_interval_minutes(self) -> int:
+        try:
+            return max(10, int(self.data.get("account_full_refresh_interval_minutes", 60)))
+        except (TypeError, ValueError):
+            return 60
+
+    @property
+    def account_full_refresh_concurrency(self) -> int:
+        try:
+            return max(1, min(10, int(self.data.get("account_full_refresh_concurrency", 3))))
+        except (TypeError, ValueError):
+            return 3
+
+    @property
     def image_retention_days(self) -> int:
         try:
             return max(1, int(self.data.get("image_retention_days", 30)))
@@ -439,6 +460,9 @@ class ConfigStore:
     def get(self) -> dict[str, object]:
         data = dict(self.data)
         data["refresh_account_interval_minute"] = self.refresh_account_interval_minute
+        data["account_full_refresh_enabled"] = self.account_full_refresh_enabled
+        data["account_full_refresh_interval_minutes"] = self.account_full_refresh_interval_minutes
+        data["account_full_refresh_concurrency"] = self.account_full_refresh_concurrency
         data["image_retention_days"] = self.image_retention_days
         data["image_poll_timeout_secs"] = self.image_poll_timeout_secs
         data["image_poll_interval_secs"] = self.image_poll_interval_secs

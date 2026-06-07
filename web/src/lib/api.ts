@@ -115,6 +115,9 @@ export type SettingsConfig = {
     prompt?: string;
   };
   refresh_account_interval_minute?: number | string;
+  account_full_refresh_enabled?: boolean;
+  account_full_refresh_interval_minutes?: number | string;
+  account_full_refresh_concurrency?: number | string;
   image_retention_days?: number | string;
   image_poll_timeout_secs?: number | string;
   image_account_concurrency?: number | string;

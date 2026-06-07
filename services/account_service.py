@@ -1261,6 +1261,23 @@ class AccountService:
                 return False
         return True
 
+    def mark_account_rate_limited(self, access_token: str, error: str = "", restore_at: str | None = None, event: str = "image_limit") -> dict | None:
+        updates = {
+            "status": "限流",
+            "quota": 0,
+            "restore_at": restore_at or None,
+            "last_refresh_error": str(error or "rate limited")[:500],
+            "last_refresh_error_at": datetime.now(timezone.utc).isoformat(),
+        }
+        account = self.update_account(access_token, updates, quiet=True)
+        if account is not None:
+            log_service.add(
+                LOG_TYPE_ACCOUNT,
+                "标记限流账号",
+                {"source": event, "token": anonymize_token(access_token), "error": str(error or "")[:300]},
+            )
+        return account
+
     def mark_image_result(self, access_token: str, success: bool) -> dict | None:
         if not access_token:
             return None
@@ -1442,6 +1459,7 @@ class AccountService:
         access_tokens: list[str],
         progress_id: str | None = None,
         defer_invalid_removal: bool = True,
+        max_workers: int | None = None,
     ) -> dict[str, Any]:
         access_tokens = list(dict.fromkeys(token for token in access_tokens if token))
         if not access_tokens:
@@ -1453,12 +1471,12 @@ class AccountService:
 
         refreshed = 0
         errors = []
-        max_workers = min(10, len(access_tokens))
+        worker_count = min(max(1, int(max_workers or 10)), len(access_tokens))
 
         if progress_id:
             self.init_refresh_progress(progress_id, len(access_tokens))
 
-        executor = ThreadPoolExecutor(max_workers=max_workers)
+        executor = ThreadPoolExecutor(max_workers=worker_count)
         try:
             futures = {
                 executor.submit(self.fetch_remote_info, token, "refresh_accounts", defer_invalid_removal): token

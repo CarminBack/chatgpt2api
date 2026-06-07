@@ -84,6 +84,9 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
   return {
     ...config,
     refresh_account_interval_minute: Number(config.refresh_account_interval_minute || 5),
+    account_full_refresh_enabled: Boolean(config.account_full_refresh_enabled !== false),
+    account_full_refresh_interval_minutes: Number(config.account_full_refresh_interval_minutes || 60),
+    account_full_refresh_concurrency: Number(config.account_full_refresh_concurrency || 3),
     image_retention_days: Number(config.image_retention_days || 30),
     image_poll_timeout_secs: Number(config.image_poll_timeout_secs || 120),
     image_account_concurrency: Number(config.image_account_concurrency || 3),
@@ -208,6 +211,9 @@ type SettingsStore = {
   removeBackup: (key: string) => Promise<void>;
   testBackup: () => Promise<void>;
   setRefreshAccountIntervalMinute: (value: string) => void;
+  setAccountFullRefreshEnabled: (value: boolean) => void;
+  setAccountFullRefreshIntervalMinutes: (value: string) => void;
+  setAccountFullRefreshConcurrency: (value: string) => void;
   setImageRetentionDays: (value: string) => void;
   setImagePollTimeoutSecs: (value: string) => void;
   setImageAccountConcurrency: (value: string) => void;
@@ -420,6 +426,18 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         },
       };
     });
+  },
+
+  setAccountFullRefreshEnabled: (value) => {
+    set((state) => state.config ? { config: { ...state.config, account_full_refresh_enabled: value } } : {});
+  },
+
+  setAccountFullRefreshIntervalMinutes: (value) => {
+    set((state) => state.config ? { config: { ...state.config, account_full_refresh_interval_minutes: value } } : {});
+  },
+
+  setAccountFullRefreshConcurrency: (value) => {
+    set((state) => state.config ? { config: { ...state.config, account_full_refresh_concurrency: value } } : {});
   },
 
   setImageRetentionDays: (value) => {

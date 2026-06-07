@@ -140,6 +140,38 @@ def start_limited_account_watcher(stop_event: Event) -> Thread:
     return thread
 
 
+def start_full_account_refresh_watcher(stop_event: Event) -> Thread:
+    def worker() -> None:
+        # 避免服务刚启动就全量打上游；第一次按配置间隔后再执行。
+        while not stop_event.wait(config.account_full_refresh_interval_minutes * 60):
+            if not config.account_full_refresh_enabled:
+                continue
+            try:
+                tokens = [str(item.get("access_token") or "") for item in account_service.list_accounts()]
+                tokens = [token for token in dict.fromkeys(tokens) if token]
+                if not tokens:
+                    continue
+                print(
+                    "[account-full-refresh] refreshing "
+                    f"{len(tokens)} accounts with concurrency {config.account_full_refresh_concurrency}"
+                )
+                result = account_service.refresh_accounts(
+                    tokens,
+                    defer_invalid_removal=True,
+                    max_workers=config.account_full_refresh_concurrency,
+                )
+                print(
+                    "[account-full-refresh] done "
+                    f"refreshed={result.get('refreshed')} errors={len(result.get('errors') or [])}"
+                )
+            except Exception as exc:
+                print(f"[account-full-refresh] fail {exc}")
+
+    thread = Thread(target=worker, name="account-full-refresh", daemon=True)
+    thread.start()
+    return thread
+
+
 def resolve_web_asset(requested_path: str) -> Path | None:
     if not WEB_DIST_DIR.exists():
         return None

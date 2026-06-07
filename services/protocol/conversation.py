@@ -6,6 +6,7 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from typing import Any, Iterable, Iterator
 
 import tiktoken
@@ -1351,6 +1352,7 @@ def _generate_single_image(
             if account_email and not getattr(exc, "account_email", ""):
                 exc.account_email = account_email
             error_text = str(exc)
+            _mark_token_rate_limited_if_needed(token, exc, "image_generation_error")
             # 如果是模型返回文本而非图片，尝试换账号重试
             if is_model_text_reply_instead_of_image(error_text) and not emitted_for_token:
                 text_reply_retry_count += 1
@@ -1391,6 +1393,7 @@ def _generate_single_image(
         except Exception as exc:
             account_service.mark_image_result(token, False)
             last_error = str(exc)
+            _mark_token_rate_limited_if_needed(token, exc, "image_stream_error")
             logger.warning({
                 "event": "image_stream_fail",
                 "request_token": token,
@@ -1470,6 +1473,28 @@ def _is_model_fallback_error(exc: Exception) -> bool:
         "rate_limit",
     )
     return any(marker in text for marker in fallback_markers)
+
+
+def _limit_restore_at_from_error(exc: Exception) -> str | None:
+    text = str(exc or "")
+    match = re.search(r'"resets_at"\s*:\s*(\d+)', text) or re.search(r"'resets_at'\s*:\s*(\d+)", text)
+    if match:
+        try:
+            return datetime.fromtimestamp(int(match.group(1)), tz=timezone.utc).isoformat()
+        except (TypeError, ValueError, OSError):
+            pass
+    match = re.search(r'"reset_after"\s*:\s*"([^"]+)"', text) or re.search(r"'reset_after'\s*:\s*'([^']+)'", text)
+    return match.group(1) if match else None
+
+
+def _mark_token_rate_limited_if_needed(access_token: str, exc: Exception, event: str) -> None:
+    if access_token and _is_model_fallback_error(exc):
+        account_service.mark_account_rate_limited(
+            access_token,
+            error=str(exc),
+            restore_at=_limit_restore_at_from_error(exc),
+            event=event,
+        )
 
 
 def _stream_image_outputs_with_pool_once(request: ConversationRequest) -> Iterator[ImageOutput]:
