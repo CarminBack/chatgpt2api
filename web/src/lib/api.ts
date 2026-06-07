@@ -72,13 +72,26 @@ type AccountMutationResponse = {
   skipped?: number;
   removed?: number;
   refreshed?: number;
+  relogined?: number;
   errors?: Array<{ access_token: string; error: string }>;
 };
 
-type AccountRefreshResponse = {
+export type AccountRefreshResponse = {
   items: Account[];
   refreshed: number;
+  relogined?: number;
   errors: Array<{ access_token: string; error: string }>;
+};
+
+export type RefreshProgressResponse = {
+  total: number;
+  processed: number;
+  done: boolean;
+  error: string | null;
+  status_counts?: Record<string, number>;
+  total_quota?: number;
+  result?: AccountRefreshResponse | null;
+  results?: Array<{ token: string; status: string; error?: string | null }>;
 };
 
 type AccountUpdateResponse = {
@@ -91,6 +104,9 @@ export type SettingsConfig = {
   base_url?: string;
   global_system_prompt?: string;
   sensitive_words?: string[];
+  sub2api_billing_enabled?: boolean;
+  sub2api_billing_dsn?: string;
+  image_price_per_request?: number | string;
   ai_review?: {
     enabled?: boolean;
     base_url?: string;
@@ -102,8 +118,14 @@ export type SettingsConfig = {
   image_retention_days?: number | string;
   image_poll_timeout_secs?: number | string;
   image_account_concurrency?: number | string;
+  image_parallel_generation?: boolean;
+  image_settle_enabled?: boolean;
+  image_check_before_hit_enabled?: boolean;
+  image_settle_secs?: number | string;
+  image_timeout_retry_secs?: number | string;
   auto_remove_invalid_accounts?: boolean;
   auto_remove_rate_limited_accounts?: boolean;
+  auto_relogin_after_refresh?: boolean;
   log_levels?: string[];
   image_storage?: ImageStorageSettings;
   backup?: BackupSettings;
@@ -213,8 +235,12 @@ export type ImageTask = {
   quality?: string;
   created_at: string;
   updated_at: string;
+  conversation_id?: string;
   data?: Array<{ b64_json?: string; url?: string; revised_prompt?: string }>;
   error?: string;
+  progress?: string;
+  elapsed_secs?: number;
+  duration_ms?: number;
 };
 
 type ImageTaskListResponse = {
@@ -242,6 +268,29 @@ export type UserKey = {
   last_used_at: string | null;
   image_quota: number;
   image_used: number;
+};
+
+export type ImageBillingLog = {
+  id: number;
+  created_at: string;
+  action: string;
+  status: string;
+  user_id: number;
+  api_key_id: number;
+  api_key: string;
+  user_email: string;
+  task_id: string;
+  amount: string;
+  balance_before: string;
+  balance_after: string;
+  mode: string;
+  model: string;
+  prompt_preview: string;
+  error: string;
+};
+
+export type ImageBillingLogListResponse = {
+  items: ImageBillingLog[];
 };
 
 export type RegisterConfig = {
@@ -342,10 +391,25 @@ export async function deleteAccounts(tokens: string[]) {
 }
 
 export async function refreshAccounts(accessTokens: string[]) {
-  return httpRequest<AccountRefreshResponse>("/api/accounts/refresh", {
+  return httpRequest<{ progress_id: string }>("/api/accounts/refresh", {
     method: "POST",
     body: { access_tokens: accessTokens },
   });
+}
+
+export async function fetchRefreshProgress(progressId: string) {
+  return httpRequest<RefreshProgressResponse>(`/api/accounts/refresh/progress/${progressId}`);
+}
+
+export async function reLoginAccounts(accessTokens: string[]) {
+  return httpRequest<{ progress_id: string }>("/api/accounts/re-login", {
+    method: "POST",
+    body: { access_tokens: accessTokens },
+  });
+}
+
+export async function fetchReLoginProgress(progressId: string) {
+  return httpRequest<RefreshProgressResponse>(`/api/accounts/re-login/progress/${progressId}`);
 }
 
 export async function updateAccount(
@@ -457,7 +521,15 @@ export async function fetchImageTasks(ids: string[]) {
   if (ids.length > 0) {
     params.set("ids", ids.join(","));
   }
-  return httpRequest<ImageTaskListResponse>(`/api/image-tasks${params.toString() ? `?${params.toString()}` : ""}`);
+  params.set("_t", String(Date.now()));
+  return httpRequest<ImageTaskListResponse>(`/api/image-tasks?${params.toString()}`);
+}
+
+export async function resumeImagePoll(taskId: string, extraTimeoutSecs = 30) {
+  return httpRequest<ImageTask>(`/api/image-tasks/${encodeURIComponent(taskId)}/resume-poll`, {
+    method: "POST",
+    body: { extra_timeout_secs: extraTimeoutSecs },
+  });
 }
 
 export async function fetchSettingsConfig() {
@@ -604,6 +676,17 @@ export async function fetchSystemLogs(filters: { type?: string; start_date?: str
   if (filters.start_date) params.set("start_date", filters.start_date);
   if (filters.end_date) params.set("end_date", filters.end_date);
   return httpRequest<{ items: SystemLog[] }>(`/api/logs${params.toString() ? `?${params.toString()}` : ""}`);
+}
+
+export async function fetchImageBillingLogs(filters: { user_email?: string; action?: string; status?: string; start_date?: string; end_date?: string; limit?: number }) {
+  const params = new URLSearchParams();
+  if (filters.user_email) params.set("user_email", filters.user_email);
+  if (filters.action) params.set("action", filters.action);
+  if (filters.status) params.set("status", filters.status);
+  if (filters.start_date) params.set("start_date", filters.start_date);
+  if (filters.end_date) params.set("end_date", filters.end_date);
+  if (filters.limit) params.set("limit", String(filters.limit));
+  return httpRequest<ImageBillingLogListResponse>(`/api/image-billing-logs${params.toString() ? `?${params.toString()}` : ""}`);
 }
 
 export async function deleteSystemLogs(ids: string[]) {

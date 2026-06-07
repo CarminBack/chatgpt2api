@@ -10,6 +10,7 @@ from services.auth_service import ImageQuotaExceeded
 from services.content_filter import check_request
 from services.image_task_service import image_task_service
 from services.log_service import LoggedCall
+from services.sub2api_billing_service import Sub2APIBillingError
 
 
 class ImageGenerationTaskRequest(BaseModel):
@@ -18,6 +19,10 @@ class ImageGenerationTaskRequest(BaseModel):
     model: str = "gpt-image-2"
     size: str | None = None
     quality: str = "auto"
+
+
+class ResumePollRequest(BaseModel):
+    extra_timeout_secs: float = Field(default=30.0, ge=5.0, le=120.0)
 
 
 def _parse_task_ids(value: str) -> list[str]:
@@ -64,6 +69,8 @@ def create_router() -> APIRouter:
             )
         except ImageQuotaExceeded as exc:
             raise HTTPException(status_code=429, detail={"error": str(exc)}) from exc
+        except Sub2APIBillingError as exc:
+            raise HTTPException(status_code=402, detail={"error": str(exc)}) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
 
@@ -95,6 +102,26 @@ def create_router() -> APIRouter:
             )
         except ImageQuotaExceeded as exc:
             raise HTTPException(status_code=429, detail={"error": str(exc)}) from exc
+        except Sub2APIBillingError as exc:
+            raise HTTPException(status_code=402, detail={"error": str(exc)}) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+
+    @router.post("/api/image-tasks/{task_id}/resume-poll")
+    async def resume_image_poll(
+        task_id: str,
+        body: ResumePollRequest,
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ):
+        identity = require_identity(authorization)
+        try:
+            return await run_in_threadpool(
+                image_task_service.resume_poll,
+                identity,
+                task_id,
+                body.extra_timeout_secs,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
 

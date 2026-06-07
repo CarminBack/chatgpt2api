@@ -25,6 +25,7 @@ from services.image_storage_service import ImageStorageError, image_storage_serv
 from services.image_tags_service import delete_tag, get_all_tags, set_tags
 from services.log_service import log_service
 from services.proxy_service import test_proxy
+from services.sub2api_billing_service import sub2api_billing_service
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -137,6 +138,28 @@ def create_router(app_version: str) -> APIRouter:
     async def get_logs(type: str = "", start_date: str = "", end_date: str = "", authorization: str | None = Header(default=None)):
         require_admin(authorization)
         return {"items": log_service.list(type=type.strip(), start_date=start_date.strip(), end_date=end_date.strip())}
+
+    @router.get("/api/image-billing-logs")
+    async def get_image_billing_logs(
+        user_email: str = "",
+        action: str = "",
+        status: str = "",
+        start_date: str = "",
+        end_date: str = "",
+        limit: int = 200,
+        authorization: str | None = Header(default=None),
+    ):
+        require_admin(authorization)
+        items = await run_in_threadpool(
+            sub2api_billing_service.list_logs,
+            limit=limit,
+            user_email=user_email,
+            action=action,
+            status=status,
+            start_date=start_date.strip(),
+            end_date=end_date.strip(),
+        )
+        return {"items": items}
 
     @router.post("/api/logs/delete")
     async def delete_logs(body: LogDeleteRequest, authorization: str | None = Header(default=None)):
