@@ -5,7 +5,7 @@ import json
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Iterable, Iterator
 
 import tiktoken
@@ -1438,7 +1438,45 @@ def _generate_single_image(
             raise ImageGenerationError(image_stream_error_message(last_error), account_email=account_email, conversation_id="") from exc
 
 
-def stream_image_outputs_with_pool(request: ConversationRequest) -> Iterator[ImageOutput]:
+def _image_model_fallback_chain(model: str) -> list[str]:
+    normalized = str(model or "").strip() or "team-codex-gpt-image-2"
+    chains = {
+        "team-codex-gpt-image-2": ["team-codex-gpt-image-2", "codex-gpt-image-2", "gpt-image-2"],
+        "codex-gpt-image-2": ["codex-gpt-image-2", "gpt-image-2"],
+    }
+    chain = chains.get(normalized, [normalized])
+    return [item for item in chain if is_supported_image_model(item)]
+
+
+def _is_model_fallback_error(exc: Exception) -> bool:
+    text = str(exc or "").lower()
+    if not text:
+        return False
+    blocked_markers = (
+        "content_policy",
+        "content policy",
+        "moderation",
+        "rejected by upstream policy",
+        "invalid_request_error",
+    )
+    if any(marker in text for marker in blocked_markers):
+        return False
+    fallback_markers = (
+        "usage_limit_reached",
+        "limit has been reached",
+        "no available",
+        "quota",
+        "rate limit",
+        "rate_limit",
+        "temporarily unavailable",
+        "timeout",
+        "connection timed out",
+        "upstream image connection failed",
+    )
+    return any(marker in text for marker in fallback_markers)
+
+
+def _stream_image_outputs_with_pool_once(request: ConversationRequest) -> Iterator[ImageOutput]:
     """并行生成多张图片，每张图片使用独立线程和账号，互不阻塞。"""
     if not is_supported_image_model(request.model):
         raise ImageGenerationError("unsupported image model,supported models: " + ", ".join(sorted(IMAGE_MODELS)))
@@ -1522,6 +1560,37 @@ def stream_image_outputs_with_pool(request: ConversationRequest) -> Iterator[Ima
         if not last_error:
             last_error = "no account in the pool could generate images — check account quota and rate-limit status"
         raise ImageGenerationError(image_stream_error_message(last_error), conversation_id="")
+
+
+def stream_image_outputs_with_pool(request: ConversationRequest) -> Iterator[ImageOutput]:
+    fallback_chain = _image_model_fallback_chain(request.model)
+    if not fallback_chain:
+        raise ImageGenerationError("unsupported image model,supported models: " + ", ".join(sorted(IMAGE_MODELS)))
+    last_error: Exception | None = None
+    for index, model in enumerate(fallback_chain):
+        attempt_request = request if model == request.model else replace(request, model=model)
+        if index > 0:
+            logger.info({
+                "event": "image_model_fallback_attempt",
+                "from_model": request.model,
+                "attempt_model": model,
+                "previous_error": str(last_error or "")[:300],
+            })
+        try:
+            yield from _stream_image_outputs_with_pool_once(attempt_request)
+            return
+        except Exception as exc:
+            last_error = exc
+            if index >= len(fallback_chain) - 1 or not _is_model_fallback_error(exc):
+                raise
+            logger.warning({
+                "event": "image_model_fallback",
+                "from_model": model,
+                "to_model": fallback_chain[index + 1],
+                "error": str(exc)[:300],
+            })
+    if last_error:
+        raise last_error
 
 
 def stream_image_chunks(outputs: Iterable[ImageOutput]) -> Iterator[dict[str, Any]]:
