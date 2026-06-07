@@ -8,6 +8,7 @@ from fastapi import HTTPException, Request
 from services.account_service import account_service
 from services.auth_service import auth_service
 from services.config import config
+from services.sub2api_billing_service import Sub2APIBillingError, sub2api_billing_service
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 WEB_DIST_DIR = BASE_DIR / "web_dist"
@@ -30,8 +31,35 @@ def _legacy_admin_identity(token: str) -> dict[str, object] | None:
 def require_identity(authorization: str | None) -> dict[str, object]:
     token = extract_bearer_token(authorization)
     identity = _legacy_admin_identity(token) or auth_service.authenticate(token)
+    billing_identity = None
+    if token and config.sub2api_billing_enabled:
+        try:
+            billing_identity = sub2api_billing_service.validate_api_key(token)
+        except Sub2APIBillingError:
+            billing_identity = None
+    if identity is None and billing_identity is not None:
+        identity = {
+            "id": f"sub2api:{billing_identity.key_id}",
+            "name": billing_identity.user_email or f"sub2api-key-{billing_identity.key_id}",
+            "role": "user",
+            "source": "sub2api",
+            "sub2api_key_id": billing_identity.key_id,
+            "sub2api_user_id": billing_identity.user_id,
+            "sub2api_user_email": billing_identity.user_email,
+            "image_quota": 0,
+            "image_used": 0,
+        }
     if identity is None:
         raise HTTPException(status_code=401, detail={"error": "密钥无效或已失效，请重新登录"})
+    identity = dict(identity)
+    identity["token"] = token
+    if billing_identity is not None:
+        identity.setdefault("source", "local")
+        if identity.get("source") != "sub2api":
+            identity["source"] = "local+sub2api"
+        identity["sub2api_key_id"] = billing_identity.key_id
+        identity["sub2api_user_id"] = billing_identity.user_id
+        identity["sub2api_user_email"] = billing_identity.user_email
     return identity
 
 

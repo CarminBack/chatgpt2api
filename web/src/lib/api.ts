@@ -104,6 +104,9 @@ export type SettingsConfig = {
   base_url?: string;
   global_system_prompt?: string;
   sensitive_words?: string[];
+  sub2api_billing_enabled?: boolean;
+  sub2api_billing_dsn?: string;
+  image_price_per_request?: number | string;
   ai_review?: {
     enabled?: boolean;
     base_url?: string;
@@ -265,6 +268,29 @@ export type UserKey = {
   last_used_at: string | null;
   image_quota: number;
   image_used: number;
+};
+
+export type ImageBillingLog = {
+  id: number;
+  created_at: string;
+  action: string;
+  status: string;
+  user_id: number;
+  api_key_id: number;
+  api_key: string;
+  user_email: string;
+  task_id: string;
+  amount: string;
+  balance_before: string;
+  balance_after: string;
+  mode: string;
+  model: string;
+  prompt_preview: string;
+  error: string;
+};
+
+export type ImageBillingLogListResponse = {
+  items: ImageBillingLog[];
 };
 
 export type RegisterConfig = {
@@ -650,6 +676,17 @@ export async function fetchSystemLogs(filters: { type?: string; start_date?: str
   if (filters.start_date) params.set("start_date", filters.start_date);
   if (filters.end_date) params.set("end_date", filters.end_date);
   return httpRequest<{ items: SystemLog[] }>(`/api/logs${params.toString() ? `?${params.toString()}` : ""}`);
+}
+
+export async function fetchImageBillingLogs(filters: { user_email?: string; action?: string; status?: string; start_date?: string; end_date?: string; limit?: number }) {
+  const params = new URLSearchParams();
+  if (filters.user_email) params.set("user_email", filters.user_email);
+  if (filters.action) params.set("action", filters.action);
+  if (filters.status) params.set("status", filters.status);
+  if (filters.start_date) params.set("start_date", filters.start_date);
+  if (filters.end_date) params.set("end_date", filters.end_date);
+  if (filters.limit) params.set("limit", String(filters.limit));
+  return httpRequest<ImageBillingLogListResponse>(`/api/image-billing-logs${params.toString() ? `?${params.toString()}` : ""}`);
 }
 
 export async function deleteSystemLogs(ids: string[]) {

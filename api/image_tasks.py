@@ -10,6 +10,7 @@ from services.auth_service import ImageQuotaExceeded
 from services.content_filter import check_request
 from services.image_task_service import image_task_service
 from services.log_service import LoggedCall
+from services.sub2api_billing_service import Sub2APIBillingError
 
 
 class ImageGenerationTaskRequest(BaseModel):
@@ -68,6 +69,8 @@ def create_router() -> APIRouter:
             )
         except ImageQuotaExceeded as exc:
             raise HTTPException(status_code=429, detail={"error": str(exc)}) from exc
+        except Sub2APIBillingError as exc:
+            raise HTTPException(status_code=402, detail={"error": str(exc)}) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
 
@@ -99,6 +102,8 @@ def create_router() -> APIRouter:
             )
         except ImageQuotaExceeded as exc:
             raise HTTPException(status_code=429, detail={"error": str(exc)}) from exc
+        except Sub2APIBillingError as exc:
+            raise HTTPException(status_code=402, detail={"error": str(exc)}) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
 

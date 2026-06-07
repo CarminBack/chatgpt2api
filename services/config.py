@@ -399,6 +399,28 @@ class ConfigStore:
         return removed
 
     @property
+    def sub2api_billing_enabled(self) -> bool:
+        value = self.data.get("sub2api_billing_enabled", False)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    @property
+    def sub2api_billing_dsn(self) -> str:
+        return str(
+            os.getenv("CHATGPT2API_SUB2API_BILLING_DSN")
+            or self.data.get("sub2api_billing_dsn")
+            or ""
+        ).strip()
+
+    @property
+    def image_price_per_request(self) -> float:
+        try:
+            return max(0.0, float(self.data.get("image_price_per_request", 0)))
+        except (TypeError, ValueError):
+            return 0.0
+
+    @property
     def base_url(self) -> str:
         return str(
             os.getenv("CHATGPT2API_BASE_URL")
@@ -433,6 +455,9 @@ class ConfigStore:
         data["backup"] = self.get_backup_settings()
         data["image_storage"] = self.get_image_storage_settings()
         data["chat_completion_cache"] = self.get_chat_completion_cache_settings()
+        data["sub2api_billing_enabled"] = self.sub2api_billing_enabled
+        data["image_price_per_request"] = self.image_price_per_request
+        data.pop("sub2api_billing_dsn", None)
         data.pop("auth-key", None)
         return data
 

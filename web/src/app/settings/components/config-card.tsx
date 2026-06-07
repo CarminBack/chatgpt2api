@@ -29,6 +29,8 @@ export function ConfigCard() {
   const setImageSettleEnabled = useSettingsStore((state) => state.setImageSettleEnabled);
   const setImageSettleSecs = useSettingsStore((state) => state.setImageSettleSecs);
   const setImageTimeoutRetrySecs = useSettingsStore((state) => state.setImageTimeoutRetrySecs);
+  const setSub2apiBillingEnabled = useSettingsStore((state) => state.setSub2apiBillingEnabled);
+  const setImagePricePerRequest = useSettingsStore((state) => state.setImagePricePerRequest);
   const setAutoRemoveInvalidAccounts = useSettingsStore((state) => state.setAutoRemoveInvalidAccounts);
   const setAutoRemoveRateLimitedAccounts = useSettingsStore((state) => state.setAutoRemoveRateLimitedAccounts);
   const setAutoReloginAfterRefresh = useSettingsStore((state) => state.setAutoReloginAfterRefresh);
@@ -260,6 +262,28 @@ export function ConfigCard() {
               className="min-h-28 rounded-xl border-stone-200 bg-white font-mono text-xs shadow-none"
             />
             <p className="text-xs text-stone-500">每次请求都会作为 system 消息注入，可用于审核用户提示词、避免违规内容、统一约束模型行为或固定角色设定。</p>
+          </div>
+          <div className="space-y-2 md:col-span-2">
+            <div className="rounded-xl border border-stone-200 bg-white px-4 py-3">
+              <label className="flex items-center gap-3 text-sm text-stone-700">
+                <Checkbox
+                  checked={Boolean(config?.sub2api_billing_enabled)}
+                  onCheckedChange={(checked) => setSub2apiBillingEnabled(Boolean(checked))}
+                />
+                启用 sub2api 余额扣图
+              </label>
+              <p className="mt-2 text-xs text-stone-500">开启后，普通用户图片生成会先扣本地图片次数额度，不足时再扣 sub2api 用户余额。</p>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm text-stone-700">每张图价格</label>
+            <Input
+              value={String(config?.image_price_per_request || "")}
+              onChange={(event) => setImagePricePerRequest(event.target.value)}
+              placeholder="0.2"
+              className="h-10 rounded-xl border-stone-200 bg-white"
+            />
+            <p className="text-xs text-stone-500">当本地图片次数额度不足时，按这个价格扣 sub2api 用户余额。</p>
           </div>
           <div className="space-y-2 md:col-span-2">
             <label className="text-sm text-stone-700">敏感词</label>

@@ -5,6 +5,7 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from services.config import DATA_DIR, config
 from services.content_filter import request_text
 from services.log_service import LOG_TYPE_CALL, log_service
 from services.protocol import openai_v1_image_edit, openai_v1_image_generations
+from services.sub2api_billing_service import Sub2APIBillingError, sub2api_billing_service
 
 TASK_STATUS_QUEUED = "queued"
 TASK_STATUS_RUNNING = "running"
@@ -46,6 +48,71 @@ def _clean(value: object, default: str = "") -> str:
 
 def _owner_id(identity: dict[str, object]) -> str:
     return _clean(identity.get("id")) or "anonymous"
+
+
+def _token_value(identity: dict[str, object]) -> str:
+    return _clean(identity.get("token"))
+
+
+def _should_use_sub2api_balance(identity: dict[str, object]) -> bool:
+    return bool(config.sub2api_billing_enabled and identity.get("source") == "sub2api" and _token_value(identity))
+
+
+def _image_price_decimal() -> Decimal:
+    return Decimal(str(config.image_price_per_request or 0))
+
+
+def _reserve_generation_credit(identity: dict[str, object], *, task_id: str, mode: str, model: str, prompt_preview: str) -> tuple[str, dict[str, Any]]:
+    if identity.get("role") != "user":
+        return "none", {}
+    if auth_service.reserve_image_quota(identity, 1):
+        return "quota", {}
+    if not _should_use_sub2api_balance(identity):
+        raise ImageQuotaExceeded("图片生成额度已用完，且该秘钥未接入 sub2api 余额扣费")
+    token = _token_value(identity)
+    if not token:
+        raise ImageQuotaExceeded("图片生成额度已用完，且缺少 sub2api 计费凭证")
+    price = _image_price_decimal()
+    if price <= 0:
+        raise ImageQuotaExceeded("图片生成额度已用完，且图片单价未配置")
+    billing_identity, balance_after = sub2api_billing_service.debit_user_balance(
+        raw_key=token,
+        amount=price,
+        task_id=task_id,
+        mode=mode,
+        model=model,
+        prompt_preview=prompt_preview,
+    )
+    return "balance", {
+        "charged_amount": str(price),
+        "balance_after": str(balance_after),
+        "sub2api_user_email": billing_identity.user_email,
+    }
+
+
+def _refund_generation_credit(task: dict[str, Any] | None) -> None:
+    if not task:
+        return
+    credit_mode = _clean(task.get("credit_mode"))
+    if credit_mode == "quota":
+        auth_service.refund_image_quota(_clean(task.get("owner_id")), 1)
+        task["quota_reserved"] = False
+        return
+    if credit_mode == "balance":
+        token = _clean(task.get("owner_token"))
+        amount = task.get("charged_amount")
+        if token and amount:
+            sub2api_billing_service.refund_user_balance(
+                raw_key=token,
+                amount=Decimal(str(amount)),
+                task_id=_clean(task.get("id")),
+                mode=_clean(task.get("mode")),
+                model=_clean(task.get("model")),
+                prompt_preview="",
+                error=_clean(task.get("error")),
+            )
+        task["charged_amount"] = None
+        return
 
 
 def _task_key(owner_id: str, task_id: str) -> str:
@@ -212,7 +279,14 @@ class ImageTaskService:
                 if cleaned:
                     self._save_locked()
                 return _public_task(task)
-            quota_reserved = auth_service.reserve_image_quota(identity, 1)
+            credit_mode, credit_meta = _reserve_generation_credit(
+                identity,
+                task_id=task_id,
+                mode=mode,
+                model=_clean(payload.get("model"), "gpt-image-2"),
+                prompt_preview=request_text(payload.get("prompt")),
+            )
+            quota_reserved = credit_mode == "quota"
             task = {
                 "id": task_id,
                 "owner_id": owner,
@@ -225,6 +299,9 @@ class ImageTaskService:
                 "updated_at": now,
                 "created_ts": time.time(),
                 "quota_reserved": quota_reserved,
+                "credit_mode": credit_mode,
+                "owner_token": _token_value(identity),
+                **credit_meta,
             }
             self._tasks[key] = task
             self._save_locked()
@@ -290,12 +367,9 @@ class ImageTaskService:
         except Exception as exc:
             with self._lock:
                 task = self._tasks.get(key)
-                quota_reserved = bool(task and task.get("quota_reserved"))
-                owner_id = _clean(task.get("owner_id")) if task else ""
+                _refund_generation_credit(task)
                 if task is not None:
-                    task["quota_reserved"] = False
-            if quota_reserved:
-                auth_service.refund_image_quota(owner_id, 1)
+                    task["credit_mode"] = "none"
             error_message = str(exc) or "image task failed"
             account_email = _clean(getattr(exc, "account_email", ""))
             conversation_id = _clean(getattr(exc, "conversation_id", ""))
@@ -401,6 +475,11 @@ class ImageTaskService:
                 "started_ts": item.get("started_ts"),
                 "duration_ms": item.get("duration_ms"),
                 "quota_reserved": bool(item.get("quota_reserved", False)),
+                "credit_mode": _clean(item.get("credit_mode")),
+                "owner_token": _clean(item.get("owner_token")),
+                "charged_amount": item.get("charged_amount"),
+                "balance_after": item.get("balance_after"),
+                "sub2api_user_email": _clean(item.get("sub2api_user_email")),
             }
             data = item.get("data")
             if isinstance(data, list):
@@ -424,11 +503,10 @@ class ImageTaskService:
         changed = False
         for task in self._tasks.values():
             if task.get("status") in UNFINISHED_STATUSES:
-                if task.get("quota_reserved"):
-                    auth_service.refund_image_quota(_clean(task.get("owner_id")), 1)
-                    task["quota_reserved"] = False
-                task["status"] = TASK_STATUS_ERROR
+                _refund_generation_credit(task)
+                task["credit_mode"] = "none"
                 task["error"] = "服务已重启，未完成的图片任务已中断"
+                task["status"] = TASK_STATUS_ERROR
                 task["updated_at"] = _now_iso()
                 changed = True
         return changed

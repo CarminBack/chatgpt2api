@@ -91,6 +91,8 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
     image_check_before_hit_enabled: Boolean(config.image_check_before_hit_enabled !== false),
     image_settle_secs: Number(config.image_settle_secs || 2.0),
     image_timeout_retry_secs: Number(config.image_timeout_retry_secs || 30),
+    sub2api_billing_enabled: Boolean(config.sub2api_billing_enabled),
+    image_price_per_request: Number(config.image_price_per_request || 0),
     auto_remove_invalid_accounts: Boolean(config.auto_remove_invalid_accounts),
     auto_remove_rate_limited_accounts: Boolean(config.auto_remove_rate_limited_accounts),
     auto_relogin_after_refresh: Boolean(config.auto_relogin_after_refresh),
@@ -213,6 +215,8 @@ type SettingsStore = {
   setImageCheckBeforeHitEnabled: (value: boolean) => void;
   setImageSettleSecs: (value: string) => void;
   setImageTimeoutRetrySecs: (value: string) => void;
+  setSub2apiBillingEnabled: (value: boolean) => void;
+  setImagePricePerRequest: (value: string) => void;
   setAutoRemoveInvalidAccounts: (value: boolean) => void;
   setAutoRemoveRateLimitedAccounts: (value: boolean) => void;
   setAutoReloginAfterRefresh: (value: boolean) => void;
@@ -354,6 +358,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         image_check_before_hit_enabled: Boolean(config.image_check_before_hit_enabled !== false),
         image_settle_secs: Math.max(0.5, Number(config.image_settle_secs) || 2.0),
         image_timeout_retry_secs: Math.max(1, Number(config.image_timeout_retry_secs) || 30),
+        sub2api_billing_enabled: Boolean(config.sub2api_billing_enabled),
+        image_price_per_request: Math.max(0, Number(config.image_price_per_request) || 0),
         auto_remove_invalid_accounts: Boolean(config.auto_remove_invalid_accounts),
         auto_remove_rate_limited_accounts: Boolean(config.auto_remove_rate_limited_accounts),
         auto_relogin_after_refresh: Boolean(config.auto_relogin_after_refresh),
@@ -442,6 +448,14 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
 
   setImageTimeoutRetrySecs: (value) => {
     set((state) => state.config ? { config: { ...state.config, image_timeout_retry_secs: value } } : {});
+  },
+
+  setSub2apiBillingEnabled: (value) => {
+    set((state) => state.config ? { config: { ...state.config, sub2api_billing_enabled: value } } : {});
+  },
+
+  setImagePricePerRequest: (value) => {
+    set((state) => state.config ? { config: { ...state.config, image_price_per_request: value } } : {});
   },
 
   setAutoRemoveInvalidAccounts: (value) => {
