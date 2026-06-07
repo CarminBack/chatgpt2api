@@ -1468,10 +1468,6 @@ def _is_model_fallback_error(exc: Exception) -> bool:
         "quota",
         "rate limit",
         "rate_limit",
-        "temporarily unavailable",
-        "timeout",
-        "connection timed out",
-        "upstream image connection failed",
     )
     return any(marker in text for marker in fallback_markers)
 
