@@ -296,6 +296,50 @@ export type ImageBillingLogListResponse = {
   items: ImageBillingLog[];
 };
 
+export type RedeemCodeStatus = "available" | "redeemed" | "expired" | "disabled" | "missing";
+
+export type RedeemCode = {
+  id: string;
+  display_code: string;
+  image_quota: number;
+  enabled: boolean;
+  created_at: string;
+  expires_at?: string | null;
+  redeemed_at?: string | null;
+  redeemed_by_id?: string | null;
+  redeemed_by_name?: string | null;
+  redeemed_by_role?: string | null;
+  status: RedeemCodeStatus;
+};
+
+export type CreatedRedeemCode = RedeemCode & {
+  code: string;
+};
+
+export type RedeemCodeListResponse = {
+  items: RedeemCode[];
+};
+
+export type RedeemCodeCreateResponse = {
+  items: CreatedRedeemCode[];
+  all_items: RedeemCode[];
+};
+
+export type RedeemCodeVerifyResponse = {
+  ok: boolean;
+  exists: boolean;
+  status: RedeemCodeStatus;
+  item?: RedeemCode;
+  error?: string;
+};
+
+export type RedeemCodeRedeemResponse = {
+  ok: boolean;
+  item: RedeemCode;
+  image_quota_added: number;
+  profile: Omit<LoginResponse, "ok" | "version">;
+};
+
 export type RegisterConfig = {
   enabled: boolean;
   mail: {
@@ -720,6 +764,38 @@ export async function updateUserKey(keyId: string, updates: { enabled?: boolean;
 export async function deleteUserKey(keyId: string) {
   return httpRequest<{ items: UserKey[] }>(`/api/auth/users/${keyId}`, {
     method: "DELETE",
+  });
+}
+
+export async function fetchRedeemCodes() {
+  return httpRequest<RedeemCodeListResponse>("/api/redeem-codes");
+}
+
+export async function createRedeemCodes(body: { count: number; image_quota: number; expires_at?: string | null; prefix?: string }) {
+  return httpRequest<RedeemCodeCreateResponse>("/api/redeem-codes", {
+    method: "POST",
+    body,
+  });
+}
+
+export async function verifyRedeemCode(code: string) {
+  return httpRequest<RedeemCodeVerifyResponse>("/api/redeem-codes/verify", {
+    method: "POST",
+    body: { code },
+  });
+}
+
+export async function redeemCode(code: string) {
+  return httpRequest<RedeemCodeRedeemResponse>("/api/redeem-codes/redeem", {
+    method: "POST",
+    body: { code },
+  });
+}
+
+export async function updateRedeemCode(codeId: string, updates: { enabled?: boolean }) {
+  return httpRequest<{ item: RedeemCode; items: RedeemCode[] }>(`/api/redeem-codes/${codeId}`, {
+    method: "POST",
+    body: updates,
   });
 }
 

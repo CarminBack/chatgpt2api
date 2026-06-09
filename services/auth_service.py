@@ -233,6 +233,25 @@ class AuthService:
                 return self._public_item(next_item)
         return None
 
+
+    def add_image_quota(self, key_id: str, amount: int) -> dict[str, object] | None:
+        normalized_id = self._clean(key_id)
+        amount = _non_negative_int(amount, 0)
+        if not normalized_id or amount <= 0:
+            return None
+        with self._lock:
+            self._reload_locked()
+            for index, item in enumerate(self._items):
+                if item.get("id") != normalized_id or item.get("role") != "user":
+                    continue
+                next_item = dict(item)
+                current_quota = _non_negative_int(next_item.get("image_quota"), 0)
+                next_item["image_quota"] = current_quota + amount
+                self._items[index] = next_item
+                self._save()
+                return self._public_item(next_item)
+        return None
+
     def reserve_image_quota(self, identity: dict[str, object], amount: int = 1) -> bool:
         if identity.get("role") != "user":
             return False

@@ -64,19 +64,20 @@ const qualityOptions = [
   { value: "high", label: "高" },
 ];
 const aspectOptions = [
-  { ratio: "1:1", tier: "1k", width: "1024", height: "1024", label: "1:1", icon: Square },
-  { ratio: "2:3", tier: "1k", width: "1024", height: "1536", label: "2:3", icon: RectangleVertical },
-  { ratio: "3:2", tier: "1k", width: "1536", height: "1024", label: "3:2", icon: RectangleHorizontal },
-  { ratio: "3:4", tier: "1k", width: "1024", height: "1365", label: "3:4", icon: RectangleVertical },
-  { ratio: "4:3", tier: "1k", width: "1365", height: "1024", label: "4:3", icon: RectangleHorizontal },
-  { ratio: "9:16", tier: "1k", width: "1088", height: "1920", label: "9:16", icon: RectangleVertical },
-  { ratio: "16:9", tier: "1k", width: "1920", height: "1088", label: "16:9", icon: RectangleHorizontal },
-  { ratio: "1:1", tier: "2k", width: "2048", height: "2048", label: "1:1(2k)", icon: Square },
-  { ratio: "16:9", tier: "2k", width: "2560", height: "1440", label: "16:9(2k)", icon: RectangleHorizontal },
-  { ratio: "9:16", tier: "2k", width: "1440", height: "2560", label: "9:16(2k)", icon: RectangleVertical },
-  { ratio: "16:9", tier: "4k", width: "3840", height: "2160", label: "16:9(4k)", icon: RectangleHorizontal },
-  { ratio: "9:16", tier: "4k", width: "2160", height: "3840", label: "9:16(4k)", icon: RectangleVertical },
-  { ratio: "auto", tier: "auto", width: "1024", height: "1024", label: "auto", icon: null },
+  { ratio: "1:1", width: { auto: "1024", "1k": "1024", "2k": "2048", "4k": "4096" }, height: { auto: "1024", "1k": "1024", "2k": "2048", "4k": "4096" }, label: "1:1", icon: Square },
+  { ratio: "2:3", width: { auto: "1024", "1k": "1024", "2k": "1440", "4k": "2160" }, height: { auto: "1536", "1k": "1536", "2k": "2160", "4k": "3240" }, label: "2:3", icon: RectangleVertical },
+  { ratio: "3:2", width: { auto: "1536", "1k": "1536", "2k": "2160", "4k": "3240" }, height: { auto: "1024", "1k": "1024", "2k": "1440", "4k": "2160" }, label: "3:2", icon: RectangleHorizontal },
+  { ratio: "3:4", width: { auto: "1024", "1k": "1024", "2k": "1536", "4k": "2304" }, height: { auto: "1365", "1k": "1365", "2k": "2048", "4k": "3072" }, label: "3:4", icon: RectangleVertical },
+  { ratio: "4:3", width: { auto: "1365", "1k": "1365", "2k": "2048", "4k": "3072" }, height: { auto: "1024", "1k": "1024", "2k": "1536", "4k": "2304" }, label: "4:3", icon: RectangleHorizontal },
+  { ratio: "9:16", width: { auto: "1088", "1k": "1088", "2k": "1440", "4k": "2160" }, height: { auto: "1920", "1k": "1920", "2k": "2560", "4k": "3840" }, label: "9:16", icon: RectangleVertical },
+  { ratio: "16:9", width: { auto: "1920", "1k": "1920", "2k": "2560", "4k": "3840" }, height: { auto: "1088", "1k": "1088", "2k": "1440", "4k": "2160" }, label: "16:9", icon: RectangleHorizontal },
+  { ratio: "auto", width: { auto: "1024", "1k": "1024", "2k": "2048", "4k": "4096" }, height: { auto: "1024", "1k": "1024", "2k": "2048", "4k": "4096" }, label: "auto", icon: null },
+];
+const tierOptions = [
+  { value: "auto", label: "自动" },
+  { value: "1k", label: "1K" },
+  { value: "2k", label: "2K" },
+  { value: "4k", label: "4K" },
 ];
 const countOptions = Array.from({ length: 10 }, (_, index) => String(index + 1));
 
@@ -124,8 +125,9 @@ export function ImageComposer({
     [imageModels],
   );
   const qualityLabel = qualityOptions.find((option) => option.value === imageQuality)?.label || "自动";
-  const ratioLabel = imageRatio === "auto" ? "auto" : `${imageRatio}(${imageTier})`;
-  const imageSizeLabel = `${qualityLabel} · ${ratioLabel} · ${imageCount || 1} 张`;
+  const tierLabel = tierOptions.find((option) => option.value === imageTier)?.label || imageTier;
+  const ratioLabel = imageRatio === "auto" ? "auto" : imageRatio;
+  const imageSizeLabel = `${qualityLabel} · ${ratioLabel} · ${tierLabel} · ${imageCount || 1} 张`;
   const selectedModelLabel = modelOptions.find((option) => option.value === imageModel)?.label || imageModel;
 
   useEffect(() => {
@@ -449,27 +451,22 @@ export function ImageComposer({
                           </div>
                           <div className="grid grid-cols-4 gap-2 sm:grid-cols-5">
                             {aspectOptions.map((option) => {
-                              const active = option.ratio === imageRatio && option.tier === imageTier && option.width === imageWidth && option.height === imageHeight;
+                              const width = option.width[imageTier as keyof typeof option.width] || option.width.auto || option.width["1k"];
+                              const height = option.height[imageTier as keyof typeof option.height] || option.height.auto || option.height["1k"];
+                              const active = option.ratio === imageRatio;
                               const Icon = option.icon;
-                              const disabled = false;
                               return (
                                 <button
-                                  key={`${option.ratio}-${option.tier}-${option.label}`}
+                                  key={`${option.ratio}-${option.label}`}
                                   type="button"
-                                  disabled={disabled}
                                   className={cn(
                                     "flex h-[64px] cursor-pointer flex-col items-center justify-center gap-1 rounded-2xl border border-stone-200 bg-white text-sm text-stone-800 transition hover:border-stone-300 hover:bg-stone-50",
                                     active && "border-stone-950",
-                                    disabled && "cursor-not-allowed border-stone-100 bg-stone-50 text-stone-300 hover:border-stone-100 hover:bg-stone-50",
                                   )}
                                   onClick={() => {
-                                    if (disabled) {
-                                      return;
-                                    }
                                     onImageRatioChange(option.ratio);
-                                    onImageTierChange(option.tier);
-                                    onImageWidthChange(option.width);
-                                    onImageHeightChange(option.height);
+                                    onImageWidthChange(width);
+                                    onImageHeightChange(height);
                                   }}
                                 >
                                   {Icon ? (
@@ -480,6 +477,34 @@ export function ImageComposer({
                                   ) : (
                                     <span>{option.label}</span>
                                   )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                        <div className="mb-3">
+                          <div className="mb-2 text-sm font-medium text-stone-900">清晰度</div>
+                          <div className="grid grid-cols-4 gap-2">
+                            {tierOptions.map((option) => {
+                              const active = option.value === imageTier;
+                              const selectedAspect = aspectOptions.find((item) => item.ratio === imageRatio) || aspectOptions[0];
+                              const width = selectedAspect.width[option.value as keyof typeof selectedAspect.width] || selectedAspect.width.auto || selectedAspect.width["1k"];
+                              const height = selectedAspect.height[option.value as keyof typeof selectedAspect.height] || selectedAspect.height.auto || selectedAspect.height["1k"];
+                              return (
+                                <button
+                                  key={option.value}
+                                  type="button"
+                                  className={cn(
+                                    "h-9 cursor-pointer rounded-full border border-stone-200 bg-white text-sm text-stone-800 transition hover:border-stone-300 hover:bg-stone-50",
+                                    active && "border-stone-950 bg-white font-medium text-stone-950",
+                                  )}
+                                  onClick={() => {
+                                    onImageTierChange(option.value);
+                                    onImageWidthChange(width);
+                                    onImageHeightChange(height);
+                                  }}
+                                >
+                                  {option.label}
                                 </button>
                               );
                             })}

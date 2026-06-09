@@ -18,11 +18,16 @@ const adminNavItems = [
   { href: "/image-manager", label: "图片管理" },
   { href: "/logs", label: "日志管理" },
   { href: "/billing-logs", label: "扣费流水" },
+  { href: "/redeem-codes", label: "兑换码" },
   { href: "/debug", label: "调试" },
   { href: "/settings", label: "设置" },
 ];
 
-const userNavItems = [{ href: "/image", label: "画图" }];
+const userNavItems = [
+  { href: "/image", label: "画图" },
+  { href: "/image-manager", label: "我的图片" },
+  { href: "/redeem", label: "兑换码" },
+];
 
 export function TopNav() {
   const pathname = usePathname();

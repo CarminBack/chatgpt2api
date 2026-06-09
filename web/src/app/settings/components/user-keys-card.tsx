@@ -270,6 +270,14 @@ export function UserKeysCard() {
                         </Badge>
                       </div>
                       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-500">
+                        <button
+                          type="button"
+                          className="font-mono text-xs text-stone-500 underline decoration-dotted underline-offset-2 transition hover:text-stone-900"
+                          title="复制用户 ID"
+                          onClick={() => void handleCopy(item.id)}
+                        >
+                          用户ID {item.id}
+                        </button>
                         <span>创建时间 {formatDateTime(item.created_at)}</span>
                         <span>最近使用 {formatDateTime(item.last_used_at)}</span>
                         <span>图片额度 {item.image_quota > 0 ? `${item.image_used}/${item.image_quota}` : `${item.image_used}/不限`}</span>
