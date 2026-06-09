@@ -78,6 +78,20 @@ EDITABLE_FILE_PPT_PROMPT = """我需要你根据用户的需求，来制作一�
 EDITABLE_FILE_PSD_PROMPT = "帮我生成这个图像，把这张海报分成若干图像，包括背景图，每个元素不要改位置，这样子我可以直接在 平时里无需拖动，底色为白色，不要伪透明底。再帮我将以上拆分的图像拼合成一个psd文件，去除白色底，不要改变每个图层的相应位置，保留每个元素所在图层的相应位置，保留每个元素的图层，最后只需要给我输出psd文件，以及每个图层的zip文件"
 EDITABLE_ASSET_POINTER_RE = re.compile(r"(?:file-service|sediment)://([A-Za-z0-9_-]+)")
 EDITABLE_ZIP_MIME_TYPES = {"application/zip", "application/x-zip-compressed"}
+
+MAX_CODEX_IMAGE_DIMENSION = 3840
+IMAGE_SIZE_RE = re.compile(r"^(\d{1,5})x(\d{1,5})$")
+
+
+def clamp_codex_image_size(size: object, max_dimension: int = MAX_CODEX_IMAGE_DIMENSION) -> str:
+    text = str(size or "1024x1024").strip() or "1024x1024"
+    match = IMAGE_SIZE_RE.match(text.lower())
+    if not match:
+        return text
+    width, height = int(match.group(1)), int(match.group(2))
+    width = max(1, min(max_dimension, width))
+    height = max(1, min(max_dimension, height))
+    return f"{width}x{height}"
 EDITABLE_PSD_MIME_TYPES = {"image/vnd.adobe.photoshop", "application/vnd.adobe.photoshop"}
 EDITABLE_PPT_MIME_TYPES = {
     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -733,7 +747,7 @@ class OpenAIBackendAPI:
                 "type": "image_generation",
                 "model": "gpt-image-2",
                 "action": "edit" if images else "generate",
-                "size": str(size or "1024x1024"),
+                "size": clamp_codex_image_size(size),
                 "quality": str(quality or "auto"),
                 "output_format": "png",
             }],
