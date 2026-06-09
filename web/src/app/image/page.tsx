@@ -1557,7 +1557,8 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     const now = new Date().toISOString();
     const conversationId = targetConversation?.id ?? createId();
     const turnId = createId();
-    const imageSize = `${imageWidth || 1024}x${imageHeight || 1024}`;
+    const clampImageDimension = (value: string) => Math.max(1, Math.min(3840, Math.floor(Number(value) || 1024)));
+    const imageSize = `${clampImageDimension(imageWidth)}x${clampImageDimension(imageHeight)}`;
     const draftTurn: ImageTurn = {
       id: turnId,
       prompt,

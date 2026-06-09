@@ -79,6 +79,7 @@ const tierOptions = [
   { value: "2k", label: "2K" },
   { value: "4k", label: "4K" },
 ];
+const maxImageDimension = 3840;
 const countOptions = Array.from({ length: 10 }, (_, index) => String(index + 1));
 
 export function ImageComposer({
@@ -129,6 +130,13 @@ export function ImageComposer({
   const ratioLabel = imageRatio === "auto" ? "auto" : imageRatio;
   const imageSizeLabel = `${qualityLabel} · ${ratioLabel} · ${tierLabel} · ${imageCount || 1} 张`;
   const selectedModelLabel = modelOptions.find((option) => option.value === imageModel)?.label || imageModel;
+  const clampDimension = (value: string) => {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) {
+      return value;
+    }
+    return String(Math.max(1, Math.min(maxImageDimension, Math.floor(numericValue))));
+  };
 
   useEffect(() => {
     if (!isSizeMenuOpen) {
@@ -426,8 +434,9 @@ export function ImageComposer({
                                 type="number"
                                 inputMode="numeric"
                                 min="1"
+                                max={maxImageDimension}
                                 value={imageWidth}
-                                onChange={(event) => onImageWidthChange(event.target.value)}
+                                onChange={(event) => onImageWidthChange(clampDimension(event.target.value))}
                                 className="h-7 border-0 bg-transparent px-0 text-sm font-medium text-stone-800 shadow-none focus-visible:ring-0"
                               />
                             </div>
@@ -438,8 +447,9 @@ export function ImageComposer({
                                 type="number"
                                 inputMode="numeric"
                                 min="1"
+                                max={maxImageDimension}
                                 value={imageHeight}
-                                onChange={(event) => onImageHeightChange(event.target.value)}
+                                onChange={(event) => onImageHeightChange(clampDimension(event.target.value))}
                                 className="h-7 border-0 bg-transparent px-0 text-sm font-medium text-stone-800 shadow-none focus-visible:ring-0"
                               />
                             </div>
