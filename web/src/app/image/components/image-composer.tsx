@@ -64,7 +64,7 @@ const qualityOptions = [
   { value: "high", label: "高" },
 ];
 const aspectOptions = [
-  { ratio: "1:1", width: { auto: "1024", "1k": "1024", "2k": "2048", "4k": "4096" }, height: { auto: "1024", "1k": "1024", "2k": "2048", "4k": "4096" }, label: "1:1", icon: Square },
+  { ratio: "1:1", width: { auto: "1024", "1k": "1024", "2k": "2048", "4k": "3840" }, height: { auto: "1024", "1k": "1024", "2k": "2048", "4k": "3840" }, label: "1:1", icon: Square },
   { ratio: "2:3", width: { auto: "1024", "1k": "1024", "2k": "1440", "4k": "2160" }, height: { auto: "1536", "1k": "1536", "2k": "2160", "4k": "3240" }, label: "2:3", icon: RectangleVertical },
   { ratio: "3:2", width: { auto: "1536", "1k": "1536", "2k": "2160", "4k": "3240" }, height: { auto: "1024", "1k": "1024", "2k": "1440", "4k": "2160" }, label: "3:2", icon: RectangleHorizontal },
   { ratio: "3:4", width: { auto: "1024", "1k": "1024", "2k": "1536", "4k": "2304" }, height: { auto: "1365", "1k": "1365", "2k": "2048", "4k": "3072" }, label: "3:4", icon: RectangleVertical },
