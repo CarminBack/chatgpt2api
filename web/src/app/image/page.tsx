@@ -56,8 +56,8 @@ const IMAGE_MODEL_STORAGE_KEY = "chatgpt2api:image_last_model";
 const IMAGE_COUNT_STORAGE_KEY = "chatgpt2api:image_last_count";
 const SCROLL_POSITIONS_STORAGE_KEY = "chatgpt2api:image_scroll_positions";
 const SCROLL_TO_LATEST_THRESHOLD = 160;
-const DEFAULT_IMAGE_MODEL: ImageModel = "team-codex-gpt-image-2";
-const IMAGE_MODEL_PRIORITY = ["team-codex-gpt-image-2", "codex-gpt-image-2", "gpt-image-2"];
+const DEFAULT_IMAGE_MODEL: ImageModel = "gpt-image-2";
+const IMAGE_MODEL_PRIORITY = ["gpt-image-2", "team-codex-gpt-image-2", "codex-gpt-image-2"];
 const DEFAULT_IMAGE_RATIO = "1:1";
 const DEFAULT_IMAGE_TIER = "1k";
 const IMAGE_DIMENSION_PRESETS = {
@@ -197,7 +197,7 @@ function filterImageModels(items: Model[]): ImageModel[] {
 
 function normalizeStoredImageModel(value: string | null, availableModels: ImageModel[]): ImageModel {
   const normalized = String(value || "").trim();
-  if (normalized && normalized !== "gpt-image-2" && availableModels.includes(normalized)) {
+  if (normalized && availableModels.includes(normalized)) {
     return normalized;
   }
   if (availableModels.includes(DEFAULT_IMAGE_MODEL)) {
@@ -748,6 +748,12 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (imageTier !== "2k" && imageTier !== "4k") {
+      setImageModel(DEFAULT_IMAGE_MODEL);
+    }
+  }, [imageTier]);
 
   const loadQuota = useCallback(async () => {
     try {
@@ -1578,6 +1584,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     }
 
     const effectiveImageMode: ImageConversationMode = referenceImageFiles.length > 0 ? "edit" : "generate";
+    const effectiveImageModel = imageTier === "2k" || imageTier === "4k" ? imageModel : DEFAULT_IMAGE_MODEL;
 
     const targetConversation = selectedConversationId
       ? conversationsRef.current.find((conversation) => conversation.id === selectedConversationId) ?? null
@@ -1590,7 +1597,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     const draftTurn: ImageTurn = {
       id: turnId,
       prompt,
-      model: imageModel,
+      model: effectiveImageModel,
       mode: effectiveImageMode,
       referenceImages: effectiveImageMode === "edit" ? referenceImages : [],
       count: parsedCount,
