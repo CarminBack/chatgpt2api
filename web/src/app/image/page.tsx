@@ -58,6 +58,21 @@ const SCROLL_POSITIONS_STORAGE_KEY = "chatgpt2api:image_scroll_positions";
 const SCROLL_TO_LATEST_THRESHOLD = 160;
 const DEFAULT_IMAGE_MODEL: ImageModel = "team-codex-gpt-image-2";
 const IMAGE_MODEL_PRIORITY = ["team-codex-gpt-image-2", "codex-gpt-image-2", "gpt-image-2"];
+const DEFAULT_IMAGE_RATIO = "1:1";
+const DEFAULT_IMAGE_TIER = "1k";
+const IMAGE_DIMENSION_PRESETS = {
+  "1:1": { width: { "1k": "1024", "2k": "2048", "4k": "3840" }, height: { "1k": "1024", "2k": "2048", "4k": "3840" } },
+  "2:3": { width: { "1k": "1024", "2k": "1440", "4k": "2160" }, height: { "1k": "1536", "2k": "2160", "4k": "3240" } },
+  "3:2": { width: { "1k": "1536", "2k": "2160", "4k": "3240" }, height: { "1k": "1024", "2k": "1440", "4k": "2160" } },
+  "3:4": { width: { "1k": "1024", "2k": "1536", "4k": "2304" }, height: { "1k": "1365", "2k": "2048", "4k": "3072" } },
+  "4:3": { width: { "1k": "1365", "2k": "2048", "4k": "3072" }, height: { "1k": "1024", "2k": "1536", "4k": "2304" } },
+  "9:16": { width: { "1k": "1088", "2k": "1440", "4k": "2160" }, height: { "1k": "1920", "2k": "2560", "4k": "3840" } },
+  "16:9": { width: { "1k": "1920", "2k": "2560", "4k": "3840" }, height: { "1k": "1088", "2k": "1440", "4k": "2160" } },
+  auto: { width: { "1k": "1024", "2k": "2048", "4k": "3840" }, height: { "1k": "1024", "2k": "2048", "4k": "3840" } },
+} as const;
+
+type ImagePresetRatio = keyof typeof IMAGE_DIMENSION_PRESETS;
+type ImagePresetTier = keyof (typeof IMAGE_DIMENSION_PRESETS)[ImagePresetRatio]["width"];
 
 function loadScrollPositions(): Map<string, number> {
   if (typeof window === "undefined") return new Map();
@@ -85,6 +100,16 @@ function saveScrollPositions(positions: Map<string, number>) {
 function clampImageCount(value: string) {
   return String(Math.min(100, Math.max(1, Math.floor(Number(value) || 1))));
 }
+
+function getPresetImageSize(ratio: string | null, tier: string | null) {
+  const presetRatio = ratio && ratio in IMAGE_DIMENSION_PRESETS ? (ratio as ImagePresetRatio) : DEFAULT_IMAGE_RATIO;
+  const presetTier = tier && tier in IMAGE_DIMENSION_PRESETS[presetRatio].width ? (tier as ImagePresetTier) : DEFAULT_IMAGE_TIER;
+  return {
+    width: IMAGE_DIMENSION_PRESETS[presetRatio].width[presetTier],
+    height: IMAGE_DIMENSION_PRESETS[presetRatio].height[presetTier],
+  };
+}
+
 function parseImageSize(size: string) {
   const match = size.match(/^(\d+)x(\d+)$/);
   return match ? { width: match[1], height: match[2] } : { width: "1024", height: "1024" };
@@ -617,10 +642,13 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         typeof window !== "undefined" ? window.localStorage.getItem(IMAGE_QUALITY_STORAGE_KEY) : null;
       const storedCount =
         typeof window !== "undefined" ? window.localStorage.getItem(IMAGE_COUNT_STORAGE_KEY) : null;
-      setImageRatio(storedRatio || "1:1");
-      setImageTier(storedTier && storedTier !== "auto" ? storedTier : "1k");
-      setImageWidth("1024");
-      setImageHeight("1024");
+      const imageRatio = storedRatio || DEFAULT_IMAGE_RATIO;
+      const imageTier = storedTier && storedTier !== "auto" ? storedTier : DEFAULT_IMAGE_TIER;
+      const imageSize = getPresetImageSize(imageRatio, imageTier);
+      setImageRatio(imageRatio);
+      setImageTier(imageTier);
+      setImageWidth(imageSize.width);
+      setImageHeight(imageSize.height);
       setImageQuality(storedQuality || "auto");
       setImageCount(storedCount ? clampImageCount(storedCount) : "1");
 
