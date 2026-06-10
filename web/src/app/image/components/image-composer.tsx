@@ -71,7 +71,7 @@ const aspectOptions = [
   { ratio: "4:3", width: { auto: "1365", "1k": "1365", "2k": "2048", "4k": "3072" }, height: { auto: "1024", "1k": "1024", "2k": "1536", "4k": "2304" }, label: "4:3", icon: RectangleHorizontal },
   { ratio: "9:16", width: { auto: "1088", "1k": "1088", "2k": "1440", "4k": "2160" }, height: { auto: "1920", "1k": "1920", "2k": "2560", "4k": "3840" }, label: "9:16", icon: RectangleVertical },
   { ratio: "16:9", width: { auto: "1920", "1k": "1920", "2k": "2560", "4k": "3840" }, height: { auto: "1088", "1k": "1088", "2k": "1440", "4k": "2160" }, label: "16:9", icon: RectangleHorizontal },
-  { ratio: "auto", width: { auto: "1024", "1k": "1024", "2k": "2048", "4k": "4096" }, height: { auto: "1024", "1k": "1024", "2k": "2048", "4k": "4096" }, label: "auto", icon: null },
+  { ratio: "auto", width: { auto: "1024", "1k": "1024", "2k": "2048", "4k": "3840" }, height: { auto: "1024", "1k": "1024", "2k": "2048", "4k": "3840" }, label: "auto", icon: null },
 ];
 const tierOptions = [
   { value: "auto", label: "自动" },

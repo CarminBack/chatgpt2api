@@ -618,7 +618,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       const storedCount =
         typeof window !== "undefined" ? window.localStorage.getItem(IMAGE_COUNT_STORAGE_KEY) : null;
       setImageRatio(storedRatio || "1:1");
-      setImageTier(storedTier || "1k");
+      setImageTier(storedTier && storedTier !== "auto" ? storedTier : "1k");
       setImageWidth("1024");
       setImageHeight("1024");
       setImageQuality(storedQuality || "auto");
