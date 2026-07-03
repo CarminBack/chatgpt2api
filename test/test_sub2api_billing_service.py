@@ -32,22 +32,30 @@ class Sub2APIBillingServiceTests(unittest.TestCase):
         self.assertIn("秘钥余额不足", error)
         self.assertIn("-0.07", error)
 
-    def test_allows_when_user_balance_and_key_quota_are_sufficient(self) -> None:
-        service = Sub2APIBillingService()
-        identity = make_identity(balance="100", quota="1.00", quota_used="0.08")
-
-        error = service._insufficient_funds_error(identity, Decimal("0.04"))
-
-        self.assertEqual(error, "")
-
-    def test_rejects_when_user_balance_is_insufficient_first(self) -> None:
+    def test_allows_when_key_quota_is_sufficient_even_if_user_balance_is_low(self) -> None:
         service = Sub2APIBillingService()
         identity = make_identity(balance="0.01", quota="1.00", quota_used="0.08")
 
         error = service._insufficient_funds_error(identity, Decimal("0.04"))
 
+        self.assertEqual(error, "")
+
+    def test_rejects_when_user_balance_is_insufficient_without_key_quota(self) -> None:
+        service = Sub2APIBillingService()
+        identity = make_identity(balance="0.01", quota="0", quota_used="0.08")
+
+        error = service._insufficient_funds_error(identity, Decimal("0.04"))
+
         self.assertIn("余额不足", error)
         self.assertNotIn("秘钥余额不足", error)
+
+    def test_charge_balance_uses_key_remaining_when_key_quota_is_set(self) -> None:
+        service = Sub2APIBillingService()
+        identity = make_identity(balance="100", quota="1.00", quota_used="0.08")
+
+        balance = service._charge_balance_before(identity)
+
+        self.assertEqual(balance, Decimal("0.92"))
 
 
 if __name__ == "__main__":
