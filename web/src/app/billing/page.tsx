@@ -51,7 +51,7 @@ function actionVariant(action: string, status: string): "success" | "danger" | "
   return "secondary";
 }
 
-function BillingContent() {
+function BillingContent({ isAdmin }: { isAdmin: boolean }) {
   const [items, setItems] = useState<ImageBillingLog[]>([]);
   const [userEmail, setUserEmail] = useState("");
   const [action, setAction] = useState("all");
@@ -87,7 +87,7 @@ function BillingContent() {
     setIsLoading(true);
     try {
       const data = await fetchImageBillingLogs({
-        user_email: userEmail.trim(),
+        user_email: isAdmin ? userEmail.trim() : "",
         action: action === "all" ? "" : action,
         status: status === "all" ? "" : status,
         start_date: startDate,
@@ -104,7 +104,7 @@ function BillingContent() {
   };
 
   const clearFilters = () => {
-    setUserEmail("");
+    if (isAdmin) setUserEmail("");
     setAction("all");
     setStatus("all");
     setStartDate("");
@@ -124,12 +124,14 @@ function BillingContent() {
           <h1 className="text-2xl font-semibold tracking-tight">图片扣费记录</h1>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Input
-            value={userEmail}
-            onChange={(event) => setUserEmail(event.target.value)}
-            placeholder="用户邮箱"
-            className="h-10 w-[220px] rounded-xl border-stone-200"
-          />
+          {isAdmin ? (
+            <Input
+              value={userEmail}
+              onChange={(event) => setUserEmail(event.target.value)}
+              placeholder="用户邮箱"
+              className="h-10 w-[220px] rounded-xl border-stone-200"
+            />
+          ) : null}
           <Select value={action} onValueChange={setAction}>
             <SelectTrigger className="h-10 w-[120px] rounded-xl border-stone-200 bg-white"><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -196,7 +198,7 @@ function BillingContent() {
               <TableHeader>
                 <TableRow>
                   <TableHead>时间</TableHead>
-                  <TableHead>用户</TableHead>
+                  {isAdmin ? <TableHead>用户</TableHead> : null}
                   <TableHead>Key</TableHead>
                   <TableHead>动作</TableHead>
                   <TableHead>金额</TableHead>
@@ -212,10 +214,12 @@ function BillingContent() {
                 {currentRows.map((item) => (
                   <TableRow key={String(item.id)} className="text-stone-600">
                     <TableCell className="whitespace-nowrap">{formatTime(item.created_at)}</TableCell>
-                    <TableCell>
-                      <div className="max-w-[220px] truncate text-stone-700">{item.user_email || "-"}</div>
-                      <div className="text-xs text-stone-400">user {item.user_id}</div>
-                    </TableCell>
+                    {isAdmin ? (
+                      <TableCell>
+                        <div className="max-w-[220px] truncate text-stone-700">{item.user_email || "-"}</div>
+                        <div className="text-xs text-stone-400">user {item.user_id}</div>
+                      </TableCell>
+                    ) : null}
                     <TableCell>
                       <div className="font-mono text-xs text-stone-600">{item.api_key}</div>
                       <div className="text-xs text-stone-400">id {item.api_key_id}</div>
@@ -275,9 +279,9 @@ function BillingContent() {
 }
 
 export default function BillingPage() {
-  const { isCheckingAuth, session } = useAuthGuard(["admin"]);
-  if (isCheckingAuth || !session || session.role !== "admin") {
+  const { isCheckingAuth, session } = useAuthGuard(["admin", "user"]);
+  if (isCheckingAuth || !session) {
     return <div className="flex min-h-[40vh] items-center justify-center"><LoaderCircle className="size-5 animate-spin text-stone-400" /></div>;
   }
-  return <BillingContent />;
+  return <BillingContent isAdmin={session.role === "admin"} />;
 }

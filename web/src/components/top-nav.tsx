@@ -29,6 +29,7 @@ const adminNavItems = [
 const userNavItems = [
   { href: "/image", label: "画图" },
   { href: "/image-manager", label: "图片管理" },
+  { href: "/billing", label: "扣费记录" },
 ];
 
 function buildThirdPartyHref(appUrl: string, baseUrl: string, apiKey: string) {

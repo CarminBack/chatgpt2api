@@ -120,9 +120,11 @@ Balance and usage updates:
 - Sets `api_keys.last_used_at`.
 - Refunds reverse balance and usage counters, clamped at zero.
 - Writes all debit/refund events to `custom_image_billing_logs`.
-- Admins can view `custom_image_billing_logs` in image3 at `/billing`. This is
-  the authoritative image3 billing ledger. It is intentionally separate from
-  token2 native `usage_logs` so token2 upgrades do not depend on image3 display
+- Admins can view all `custom_image_billing_logs` in image3 at `/billing`.
+  Normal token2 users can also open `/billing`, but the API force-filters their
+  results to the current authenticated `sub2api_key_id`. This is the
+  authoritative image3 billing ledger. It is intentionally separate from token2
+  native `usage_logs` so token2 upgrades do not depend on image3 display
   records.
 
 Image management:
@@ -202,7 +204,8 @@ Primary custom files:
   - image management APIs use `require_identity`; admin gets all images, user gets own images
   - exposes admin-only `/api/billing/image-logs` for the image3 billing ledger
 - `web/src/app/billing/page.tsx`
-  - admin-only billing ledger page backed by `custom_image_billing_logs`
+  - billing ledger page backed by `custom_image_billing_logs`; admins see all
+    rows, normal users see only the current token2 key
 - `web/src/app/image-manager/page.tsx`
   - allows both admin and user roles
   - hides admin-only storage cleanup/compression controls from normal users

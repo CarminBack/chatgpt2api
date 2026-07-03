@@ -75,16 +75,16 @@ def _mask_api_key(value: object) -> str:
     return f"{text[:7]}...{text[-6:]}"
 
 
-def _billing_log_item(row: dict[str, object]) -> dict[str, object]:
+def _billing_log_item(row: dict[str, object], *, include_user_fields: bool = True) -> dict[str, object]:
     return {
         "id": row.get("id"),
         "created_at": str(row.get("created_at") or ""),
         "action": row.get("action") or "",
         "status": row.get("status") or "",
-        "user_id": row.get("user_id"),
+        "user_id": row.get("user_id") if include_user_fields else "",
         "api_key_id": row.get("api_key_id"),
         "api_key": _mask_api_key(row.get("api_key")),
-        "user_email": row.get("user_email") or "",
+        "user_email": row.get("user_email") if include_user_fields else "",
         "task_id": row.get("task_id") or "",
         "amount": str(row.get("amount") or "0"),
         "balance_before": str(row.get("balance_before") or "0"),
@@ -198,17 +198,26 @@ def create_router(app_version: str) -> APIRouter:
         end_date: str = "",
         authorization: str | None = Header(default=None),
     ):
-        require_admin(authorization)
+        identity = require_identity(authorization)
+        is_admin = identity.get("role") == "admin"
+        api_key_id = None
+        if not is_admin:
+            raw_key_id = identity.get("sub2api_key_id")
+            try:
+                api_key_id = int(raw_key_id)
+            except (TypeError, ValueError):
+                return {"items": []}
         rows = await run_in_threadpool(
             sub2api_billing_service.list_logs,
             limit=limit,
-            user_email=user_email.strip(),
+            api_key_id=api_key_id,
+            user_email=user_email.strip() if is_admin else "",
             action=action.strip(),
             status=status.strip(),
             start_date=start_date.strip(),
             end_date=end_date.strip(),
         )
-        return {"items": [_billing_log_item(row) for row in rows]}
+        return {"items": [_billing_log_item(row, include_user_fields=is_admin) for row in rows]}
 
     @router.post("/api/proxy/test")
     async def test_proxy_endpoint(body: ProxyTestRequest, authorization: str | None = Header(default=None)):

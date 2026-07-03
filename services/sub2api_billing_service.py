@@ -451,6 +451,7 @@ FOR UPDATE
         self,
         *,
         limit: int = 200,
+        api_key_id: int | None = None,
         user_email: str = "",
         action: str = "",
         status: str = "",
@@ -463,6 +464,9 @@ FOR UPDATE
             "WHERE 1=1",
         ]
         params: list[Any] = []
+        if api_key_id is not None:
+            sql.append("AND api_key_id = %s")
+            params.append(int(api_key_id))
         if user_email.strip():
             sql.append("AND user_email ILIKE %s")
             params.append(f"%{user_email.strip()}%")
