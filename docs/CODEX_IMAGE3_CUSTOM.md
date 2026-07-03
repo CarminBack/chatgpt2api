@@ -68,6 +68,17 @@ Current production policy:
 
 Image3 supports token2/sub2api API key login and image billing.
 
+Time display:
+
+- User-facing image3 times are formatted as UTC+8 / `Asia/Shanghai`.
+- Frontend date/time rendering should use `web/src/lib/datetime.ts` instead of
+  browser-default `toLocaleString` / `Intl.DateTimeFormat` calls.
+- Bare backend timestamps such as `YYYY-MM-DD HH:mm:ss` are treated as UTC when
+  rendering, then displayed in UTC+8. Timestamps with an explicit timezone are
+  converted normally.
+- Image billing date filters use the UTC+8 natural day in PostgreSQL:
+  `(created_at AT TIME ZONE 'Asia/Shanghai')::date`.
+
 Authentication:
 
 - Local legacy admin key still works.
@@ -208,6 +219,9 @@ Primary custom files:
   - balance debit/refund
   - key usage sync
   - billing logs
+  - billing log date filters use UTC+8 natural days
+- `web/src/lib/datetime.ts`
+  - central UTC+8 frontend time formatting helper
 - `api/support.py`
   - Bearer token extraction
   - local auth fallback

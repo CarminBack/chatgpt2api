@@ -29,6 +29,7 @@ import {
   type Model,
   type ImageTask,
 } from "@/lib/api";
+import { formatUtc8MonthDayTime } from "@/lib/datetime";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 import { useSettingsStore } from "@/app/settings/store";
 import {
@@ -103,16 +104,7 @@ function buildConversationTitle(prompt: string) {
 }
 
 function formatConversationTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
+  return formatUtc8MonthDayTime(value);
 }
 
 function formatAvailableQuota(accounts: Account[]) {

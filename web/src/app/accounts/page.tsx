@@ -59,6 +59,7 @@ import {
   type RefreshProgressResponse,
 } from "@/lib/api";
 import { useAuthGuard } from "@/lib/use-auth-guard";
+import { formatUtc8DateTime, formatUtc8MonthDayTime, getDateTimeMs } from "@/lib/datetime";
 import { cn } from "@/lib/utils";
 
 import { AccountImportDialog } from "./components/account-import-dialog";
@@ -123,21 +124,17 @@ function formatRestoreAt(value?: string | null) {
     return { absolute: "—", relative: "" };
   }
 
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
+  const timeMs = getDateTimeMs(value);
+  if (Number.isNaN(timeMs)) {
     return { absolute: value, relative: "" };
   }
 
-  const diffMs = Math.max(0, date.getTime() - Date.now());
+  const diffMs = Math.max(0, timeMs - Date.now());
   const totalHours = Math.ceil(diffMs / (1000 * 60 * 60));
   const days = Math.floor(totalHours / 24);
   const hours = totalHours % 24;
   const relative = diffMs > 0 ? `剩余 ${days}d ${hours}h` : "已到恢复时间";
-
-  const pad = (num: number) => String(num).padStart(2, "0");
-  const absolute = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(
-    date.getHours(),
-  )}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  const absolute = formatUtc8DateTime(value);
 
   return { absolute, relative };
 }
@@ -1153,11 +1150,7 @@ function AccountsPageContent() {
                           {(() => {
                             const raw = (account as any).created_at;
                             if (!raw) return "—";
-                            try {
-                              const d = new Date(raw + "Z");
-                              if (isNaN(d.getTime())) return String(raw).slice(0, 10);
-                              return d.toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
-                            } catch { return String(raw).slice(0, 10); }
+                            return formatUtc8MonthDayTime(raw);
                           })()}
                         </td>
                         <td className="px-4 py-3">

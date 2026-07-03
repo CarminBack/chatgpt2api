@@ -17,23 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { createUserKey, deleteUserKey, fetchUserKeys, updateUserKey, type UserKey } from "@/lib/api";
-
-function formatDateTime(value?: string | null) {
-  if (!value) {
-    return "—";
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-  return new Intl.DateTimeFormat("zh-CN", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-}
+import { formatUtc8DateTime } from "@/lib/datetime";
 
 export function UserKeysCard() {
   const didLoadRef = useRef(false);
@@ -231,8 +215,8 @@ export function UserKeysCard() {
                         </Badge>
                       </div>
                       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-500">
-                        <span>创建时间 {formatDateTime(item.created_at)}</span>
-                        <span>最近使用 {formatDateTime(item.last_used_at)}</span>
+                        <span>创建时间 {formatUtc8DateTime(item.created_at, { seconds: false })}</span>
+                        <span>最近使用 {formatUtc8DateTime(item.last_used_at, { seconds: false })}</span>
                       </div>
                     </div>
 

@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { fetchImageBillingLogs, type ImageBillingLog } from "@/lib/api";
+import { formatUtc8DateTime } from "@/lib/datetime";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 
 const actionLabels: Record<string, string> = {
@@ -38,10 +39,6 @@ function amountValue(value: string) {
 function formatAmount(value: string | number) {
   const parsed = typeof value === "number" ? value : amountValue(value);
   return parsed.toFixed(8).replace(/\.?0+$/, "") || "0";
-}
-
-function formatTime(value: string) {
-  return value.replace("T", " ").replace(/\.\d+/, "");
 }
 
 function actionVariant(action: string, status: string): "success" | "danger" | "warning" | "info" | "secondary" {
@@ -213,7 +210,7 @@ function BillingContent({ isAdmin }: { isAdmin: boolean }) {
               <TableBody>
                 {currentRows.map((item) => (
                   <TableRow key={String(item.id)} className="text-stone-600">
-                    <TableCell className="whitespace-nowrap">{formatTime(item.created_at)}</TableCell>
+                    <TableCell className="whitespace-nowrap">{formatUtc8DateTime(item.created_at)}</TableCell>
                     {isAdmin ? (
                       <TableCell>
                         <div className="max-w-[220px] truncate text-stone-700">{item.user_email || "-"}</div>

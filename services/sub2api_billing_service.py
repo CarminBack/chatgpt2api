@@ -507,10 +507,10 @@ FOR UPDATE
             sql.append("AND status = %s")
             params.append(status.strip())
         if start_date.strip():
-            sql.append("AND created_at::date >= %s::date")
+            sql.append("AND (created_at AT TIME ZONE 'Asia/Shanghai')::date >= %s::date")
             params.append(start_date.strip())
         if end_date.strip():
-            sql.append("AND created_at::date <= %s::date")
+            sql.append("AND (created_at AT TIME ZONE 'Asia/Shanghai')::date <= %s::date")
             params.append(end_date.strip())
         sql.append("ORDER BY id DESC LIMIT %s")
         params.append(max(1, min(int(limit or 200), 1000)))
