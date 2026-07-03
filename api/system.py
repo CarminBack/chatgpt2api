@@ -25,6 +25,7 @@ from services.image_storage_service import ImageStorageError, image_storage_serv
 from services.image_tags_service import delete_tag, get_all_tags, set_tags
 from services.log_service import log_service
 from services.proxy_service import proxy_settings, test_clearance, test_proxy
+from services.sub2api_billing_service import sub2api_billing_service
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -65,6 +66,34 @@ def _image_owner_filter(identity: dict[str, object]) -> str | None:
     if not owner_id:
         raise HTTPException(status_code=401, detail={"error": "密钥无效或已失效，请重新登录"})
     return owner_id
+
+
+def _mask_api_key(value: object) -> str:
+    text = str(value or "").strip()
+    if len(text) <= 12:
+        return text
+    return f"{text[:7]}...{text[-6:]}"
+
+
+def _billing_log_item(row: dict[str, object]) -> dict[str, object]:
+    return {
+        "id": row.get("id"),
+        "created_at": str(row.get("created_at") or ""),
+        "action": row.get("action") or "",
+        "status": row.get("status") or "",
+        "user_id": row.get("user_id"),
+        "api_key_id": row.get("api_key_id"),
+        "api_key": _mask_api_key(row.get("api_key")),
+        "user_email": row.get("user_email") or "",
+        "task_id": row.get("task_id") or "",
+        "amount": str(row.get("amount") or "0"),
+        "balance_before": str(row.get("balance_before") or "0"),
+        "balance_after": str(row.get("balance_after") or "0"),
+        "mode": row.get("mode") or "",
+        "model": row.get("model") or "",
+        "prompt_preview": row.get("prompt_preview") or "",
+        "error": row.get("error") or "",
+    }
 
 
 def create_router(app_version: str) -> APIRouter:
@@ -158,6 +187,28 @@ def create_router(app_version: str) -> APIRouter:
     async def delete_logs(body: LogDeleteRequest, authorization: str | None = Header(default=None)):
         require_admin(authorization)
         return log_service.delete(body.ids)
+
+    @router.get("/api/billing/image-logs")
+    async def get_image_billing_logs(
+        limit: int = Query(default=200, ge=1, le=1000),
+        user_email: str = "",
+        action: str = "",
+        status: str = "",
+        start_date: str = "",
+        end_date: str = "",
+        authorization: str | None = Header(default=None),
+    ):
+        require_admin(authorization)
+        rows = await run_in_threadpool(
+            sub2api_billing_service.list_logs,
+            limit=limit,
+            user_email=user_email.strip(),
+            action=action.strip(),
+            status=status.strip(),
+            start_date=start_date.strip(),
+            end_date=end_date.strip(),
+        )
+        return {"items": [_billing_log_item(row) for row in rows]}
 
     @router.post("/api/proxy/test")
     async def test_proxy_endpoint(body: ProxyTestRequest, authorization: str | None = Header(default=None)):

@@ -20,6 +20,7 @@ const adminNavItems = [
   { href: "/accounts", label: "号池管理" },
   { href: "/register", label: "注册机" },
   { href: "/image-manager", label: "图片管理" },
+  { href: "/billing", label: "扣费记录" },
   { href: "/logs", label: "日志管理" },
   { href: "/debug", label: "调试" },
   { href: "/settings", label: "设置" },

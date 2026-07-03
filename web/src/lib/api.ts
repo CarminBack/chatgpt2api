@@ -276,6 +276,25 @@ export type SystemLog = {
   [key: string]: unknown;
 };
 
+export type ImageBillingLog = {
+  id: number | string;
+  created_at: string;
+  action: "debit" | "refund" | string;
+  status: "success" | "failed" | string;
+  user_id: number | string;
+  api_key_id: number | string;
+  api_key: string;
+  user_email: string;
+  task_id: string;
+  amount: string;
+  balance_before: string;
+  balance_after: string;
+  mode: string;
+  model: string;
+  prompt_preview: string;
+  error: string;
+};
+
 export type ImageResponse = {
   created: number;
   data: Array<{ b64_json?: string; url?: string; revised_prompt?: string }>;
@@ -712,6 +731,24 @@ export async function fetchSystemLogs(filters: { type?: string; start_date?: str
   if (filters.start_date) params.set("start_date", filters.start_date);
   if (filters.end_date) params.set("end_date", filters.end_date);
   return httpRequest<{ items: SystemLog[] }>(`/api/logs${params.toString() ? `?${params.toString()}` : ""}`);
+}
+
+export async function fetchImageBillingLogs(filters: {
+  user_email?: string;
+  action?: string;
+  status?: string;
+  start_date?: string;
+  end_date?: string;
+  limit?: number;
+}) {
+  const params = new URLSearchParams();
+  if (filters.user_email) params.set("user_email", filters.user_email);
+  if (filters.action) params.set("action", filters.action);
+  if (filters.status) params.set("status", filters.status);
+  if (filters.start_date) params.set("start_date", filters.start_date);
+  if (filters.end_date) params.set("end_date", filters.end_date);
+  params.set("limit", String(filters.limit || 200));
+  return httpRequest<{ items: ImageBillingLog[] }>(`/api/billing/image-logs?${params.toString()}`);
 }
 
 export async function deleteSystemLogs(ids: string[]) {
