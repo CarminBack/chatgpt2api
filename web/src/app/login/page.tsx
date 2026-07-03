@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { LoaderCircle, LockKeyhole } from "lucide-react";
 import { toast } from "sonner";
 
@@ -13,14 +13,35 @@ import { login } from "@/lib/api";
 import { useRedirectIfAuthenticated } from "@/lib/use-auth-guard";
 import { getDefaultRouteForRole, setStoredAuthSession } from "@/store/auth";
 
+function readAutoLoginKeyFromUrl() {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  const hash = window.location.hash.startsWith("#")
+    ? window.location.hash.slice(1)
+    : window.location.hash;
+  const hashParams = new URLSearchParams(hash);
+  const searchParams = new URLSearchParams(window.location.search);
+  return String(
+    hashParams.get("apiKey") ||
+      hashParams.get("key") ||
+      searchParams.get("apiKey") ||
+      searchParams.get("key") ||
+      "",
+  ).trim();
+}
+
 export default function LoginPage() {
   const router = useRouter();
-  const [authKey, setAuthKey] = useState("");
+  const [autoLoginKey] = useState(readAutoLoginKeyFromUrl);
+  const [authKey, setAuthKey] = useState(autoLoginKey);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const { isCheckingAuth } = useRedirectIfAuthenticated();
+  const autoLoginStartedRef = useRef(false);
+  const { isCheckingAuth } = useRedirectIfAuthenticated({ disabled: Boolean(autoLoginKey) });
 
-  const handleLogin = async () => {
-    const normalizedAuthKey = authKey.trim();
+  const handleLogin = async (nextAuthKey = authKey) => {
+    const normalizedAuthKey = nextAuthKey.trim();
     if (!normalizedAuthKey) {
       toast.error("请输入 密钥");
       return;
@@ -43,6 +64,18 @@ export default function LoginPage() {
       setIsSubmitting(false);
     }
   };
+
+  useEffect(() => {
+    if (!autoLoginKey || autoLoginStartedRef.current) {
+      return;
+    }
+    autoLoginStartedRef.current = true;
+    window.history.replaceState(null, "", window.location.pathname);
+    void handleLogin(autoLoginKey);
+    // handleLogin intentionally stays outside the dependency list to avoid
+    // restarting the one-shot URL login after authKey/isSubmitting changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoLoginKey]);
 
   if (isCheckingAuth) {
     return (

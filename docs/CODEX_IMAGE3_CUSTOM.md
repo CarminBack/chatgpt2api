@@ -75,6 +75,28 @@ Authentication:
 - If a Bearer token is not local and `sub2api_billing_enabled=true`, image3 validates it against token2/sub2api `api_keys`.
 - Non-whitelisted token2 groups are rejected during authentication.
 - Current whitelist is `group_id=12`.
+- The image3 login page accepts one-shot URL auto-login through
+  `https://image3.mewinyou.shop/login#apiKey=<token2_api_key>`. The fragment is
+  consumed in the browser, removed from the address bar, then submitted through
+  the normal `/auth/login` flow.
+
+Token2 image entry:
+
+- token2 injects `/token2-image-entry.js` from the 1Panel openresty site
+  directory, not from the token2 binary.
+- Repository source copy: `scripts/token2-image-entry.js`.
+- Production path:
+  `/opt/1panel/apps/openresty/openresty/www/sites/token2.mewinyou.shop/index/token2-image-entry.js`
+- The script adds the sidebar `图片生成` entry. On click, it uses the current
+  token2 browser session (`localStorage.auth_token`) to call `/api/v1/keys`,
+  chooses the first active key from `group_id=12`, and redirects to image3 with
+  that key in the URL hash.
+- If the current token2 user has no active `group_id=12` key, the script creates
+  one with name `image3自动生成` and no quota. A missing quota means the key has
+  no separate key cap; image3 still debits the token2 user wallet. Admins can add
+  a key quota later to cap that specific key's spend.
+- The token2 nginx `/image` and `/image/` fallback redirects should point to
+  `https://image3.mewinyou.shop/login`, not image2.
 
 Billing:
 
@@ -190,6 +212,11 @@ Primary custom files:
   - Bearer token extraction
   - local auth fallback
   - token2/sub2api identity creation
+- `web/src/app/login/page.tsx`
+  - supports token2 one-shot `#apiKey=` auto-login
+- `web/src/lib/use-auth-guard.ts`
+  - lets the login page skip existing-session redirect during one-shot
+    auto-login
 - `api/ai.py`
   - direct image generation/edit billing wrapper
 - `services/image_task_service.py`

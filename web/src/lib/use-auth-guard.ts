@@ -58,11 +58,17 @@ export function useAuthGuard(allowedRoles?: AuthRole[]): UseAuthGuardResult {
   return { isCheckingAuth, session };
 }
 
-export function useRedirectIfAuthenticated() {
+export function useRedirectIfAuthenticated(options: { disabled?: boolean } = {}) {
   const router = useRouter();
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const disabled = options.disabled === true;
 
   useEffect(() => {
+    if (disabled) {
+      setIsCheckingAuth(false);
+      return;
+    }
+
     let active = true;
 
     const load = async () => {
@@ -83,7 +89,7 @@ export function useRedirectIfAuthenticated() {
     return () => {
       active = false;
     };
-  }, [router]);
+  }, [disabled, router]);
 
   return { isCheckingAuth };
 }
