@@ -110,17 +110,19 @@ Current expected prices for user 1 with image2 group multiplier `0.4`:
 
 Balance and usage updates:
 
-- If `api_keys.quota > 0`, image3 treats the key's remaining quota
-  (`api_keys.quota - api_keys.quota_used`) as that key's own balance. Debit and
-  refund only change key usage counters and do not change `users.balance`.
-- If `api_keys.quota <= 0`, image3 falls back to `users.balance` billing.
-- If the active billing balance is lower than the charge amount, the image
-  request is rejected before it reaches the upstream image service.
+- Image3 always debits and refunds the token2 user wallet in `users.balance`.
+- If `api_keys.quota > 0`, the key's remaining quota
+  (`api_keys.quota - api_keys.quota_used`) is also enforced as that key's spend
+  limit and is used as the displayed before/after balance in the image3 billing
+  ledger.
+- If either `users.balance` or the configured key remaining quota is lower than
+  the charge amount, the image request is rejected before it reaches the
+  upstream image service.
 - Increments `api_keys.quota_used` when billing succeeds.
 - Increments `api_keys.usage_5h`, `usage_1d`, `usage_7d`.
 - Sets `api_keys.last_used_at`.
-- Refunds reverse the same balance source used by the debit and decrement usage
-  counters, clamped at zero.
+- Refunds add money back to `users.balance` and decrement usage counters,
+  clamped at zero.
 - Writes all debit/refund events to `custom_image_billing_logs`.
 - Admins can view all `custom_image_billing_logs` in image3 at `/billing`.
   Normal token2 users can also open `/billing`, but the API force-filters their

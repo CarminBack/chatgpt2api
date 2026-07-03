@@ -298,14 +298,13 @@ WHERE id = %s
         return self._to_decimal(identity.key_quota) - self._to_decimal(identity.key_quota_used)
 
     def _insufficient_funds_error(self, identity: Sub2APIKeyIdentity, amount: Decimal) -> str:
+        balance = self._to_decimal(identity.balance)
+        if balance < amount:
+            return f"余额不足：当前 {balance}，需要 {amount}"
         if self._uses_key_quota(identity):
             key_remaining = self._key_remaining(identity)
             if key_remaining < amount:
                 return f"秘钥余额不足：当前 {key_remaining}，需要 {amount}"
-            return ""
-        balance = self._to_decimal(identity.balance)
-        if balance < amount:
-            return f"余额不足：当前 {balance}，需要 {amount}"
         return ""
 
     def _charge_balance_before(self, identity: Sub2APIKeyIdentity) -> Decimal:
@@ -313,7 +312,7 @@ WHERE id = %s
             return self._key_remaining(identity)
         return self._to_decimal(identity.balance)
 
-    def _charge_balance_after_refund(self, *, key_quota: Decimal, key_quota_used: Decimal, amount: Decimal) -> Decimal:
+    def _display_balance_after_refund(self, *, key_quota: Decimal, key_quota_used: Decimal, amount: Decimal) -> Decimal:
         key_remaining = key_quota - key_quota_used
         if key_quota > 0:
             return min(key_quota, key_remaining + amount)
@@ -362,11 +361,11 @@ WHERE id = %s
                     )
                     raise Sub2APIBillingError(insufficient_error)
                 next_balance = balance_before - amount
-                if not self._uses_key_quota(identity):
-                    cur.execute(
-                        "UPDATE users SET balance = %s, updated_at = now() WHERE id = %s",
-                        (str(next_balance), identity.user_id),
-                    )
+                user_balance_after = self._to_decimal(identity.balance) - amount
+                cur.execute(
+                    "UPDATE users SET balance = %s, updated_at = now() WHERE id = %s",
+                    (str(user_balance_after), identity.user_id),
+                )
                 self._increment_key_usage(cur, key_id=identity.key_id, amount=amount)
                 self._log_event(
                     cur,
@@ -442,20 +441,21 @@ FOR UPDATE
                     raise Sub2APIBillingError("退款失败：sub2api API key 不存在")
                 key_quota = self._to_decimal(row.get("quota"))
                 key_quota_used = self._to_decimal(row.get("quota_used"))
+                user_balance = self._to_decimal(row["balance"])
                 if key_quota > 0:
                     balance = key_quota - key_quota_used
-                    next_balance = self._charge_balance_after_refund(
+                    next_balance = self._display_balance_after_refund(
                         key_quota=key_quota,
                         key_quota_used=key_quota_used,
                         amount=amount,
                     )
                 else:
-                    balance = self._to_decimal(row["balance"])
-                    next_balance = balance + amount
-                    cur.execute(
-                        "UPDATE users SET balance = %s, updated_at = now() WHERE id = %s",
-                        (str(next_balance), int(row["user_id"])),
-                    )
+                    balance = user_balance
+                    next_balance = user_balance + amount
+                cur.execute(
+                    "UPDATE users SET balance = %s, updated_at = now() WHERE id = %s",
+                    (str(user_balance + amount), int(row["user_id"])),
+                )
                 self._decrement_key_usage(cur, key_id=int(row["key_id"]), amount=amount)
                 self._log_event(
                     cur,
