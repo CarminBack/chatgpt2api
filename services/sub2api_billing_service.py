@@ -291,6 +291,15 @@ WHERE id = %s
         amount = unit_price * Decimal(max(0, int(image_count or 0)))
         return identity, unit_price, amount.quantize(Decimal("0.00000001"))
 
+    def _insufficient_funds_error(self, identity: Sub2APIKeyIdentity, amount: Decimal) -> str:
+        balance = self._to_decimal(identity.balance)
+        if balance < amount:
+            return f"余额不足：当前 {balance}，需要 {amount}"
+        key_remaining = self._to_decimal(identity.key_quota) - self._to_decimal(identity.key_quota_used)
+        if key_remaining < amount:
+            return f"秘钥余额不足：当前 {key_remaining}，需要 {amount}"
+        return ""
+
     def debit_user_balance(
         self,
         *,
@@ -313,7 +322,8 @@ WHERE id = %s
                 self._validate_row(row)
                 identity = self._identity_from_row(key, row)
                 balance = self._to_decimal(row["balance"])
-                if balance < amount:
+                insufficient_error = self._insufficient_funds_error(identity, amount)
+                if insufficient_error:
                     self._log_event(
                         cur,
                         action="debit",
@@ -329,9 +339,9 @@ WHERE id = %s
                         mode=mode,
                         model=model,
                         prompt_preview=prompt_preview,
-                        error=f"余额不足：当前 {balance}，需要 {amount}",
+                        error=insufficient_error,
                     )
-                    raise Sub2APIBillingError(f"余额不足：当前 {balance}，需要 {amount}")
+                    raise Sub2APIBillingError(insufficient_error)
                 next_balance = balance - amount
                 cur.execute(
                     "UPDATE users SET balance = %s, updated_at = now() WHERE id = %s",

@@ -110,6 +110,10 @@ Current expected prices for user 1 with image2 group multiplier `0.4`:
 
 Balance and usage updates:
 
+- Before debit, image3 checks both `users.balance` and the key's remaining quota
+  (`api_keys.quota - api_keys.quota_used`). If either is lower than the charge
+  amount, the image request is rejected before it reaches the upstream image
+  service.
 - Debits `users.balance`.
 - Increments `api_keys.quota_used`.
 - Increments `api_keys.usage_5h`, `usage_1d`, `usage_7d`.
@@ -204,7 +208,7 @@ Keep future custom logic concentrated in `services/sub2api_billing_service.py` w
 ## Error Semantics
 
 - Invalid or non-whitelisted token2 key should return `401` through the normal auth path.
-- Billing failure after authentication, such as insufficient balance or disabled image generation group, should return `402`.
+- Billing failure after authentication, such as insufficient user balance, insufficient key quota, or disabled image generation group, should return `402`.
 - Upstream image failure after successful debit should trigger refund.
 
 ## Build And Deploy Image3
