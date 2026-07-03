@@ -78,20 +78,6 @@ EDITABLE_FILE_PPT_PROMPT = """我需要你根据用户的需求，来制作一�
 EDITABLE_FILE_PSD_PROMPT = "帮我生成这个图像，把这张海报分成若干图像，包括背景图，每个元素不要改位置，这样子我可以直接在 平时里无需拖动，底色为白色，不要伪透明底。再帮我将以上拆分的图像拼合成一个psd文件，去除白色底，不要改变每个图层的相应位置，保留每个元素所在图层的相应位置，保留每个元素的图层，最后只需要给我输出psd文件，以及每个图层的zip文件"
 EDITABLE_ASSET_POINTER_RE = re.compile(r"(?:file-service|sediment)://([A-Za-z0-9_-]+)")
 EDITABLE_ZIP_MIME_TYPES = {"application/zip", "application/x-zip-compressed"}
-
-MAX_CODEX_IMAGE_DIMENSION = 3840
-IMAGE_SIZE_RE = re.compile(r"^(\d{1,5})x(\d{1,5})$")
-
-
-def clamp_codex_image_size(size: object, max_dimension: int = MAX_CODEX_IMAGE_DIMENSION) -> str:
-    text = str(size or "1024x1024").strip() or "1024x1024"
-    match = IMAGE_SIZE_RE.match(text.lower())
-    if not match:
-        return text
-    width, height = int(match.group(1)), int(match.group(2))
-    width = max(1, min(max_dimension, width))
-    height = max(1, min(max_dimension, height))
-    return f"{width}x{height}"
 EDITABLE_PSD_MIME_TYPES = {"image/vnd.adobe.photoshop", "application/vnd.adobe.photoshop"}
 EDITABLE_PPT_MIME_TYPES = {
     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -215,6 +201,27 @@ class OpenAIBackendAPI:
         if self.access_token:
             self.session.headers["Authorization"] = f"Bearer {self.access_token}"
 
+    def close(self) -> None:
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+        session = getattr(self, "session", None)
+        if session:
+            try:
+                session.close()
+            except Exception:
+                pass
+
+    def __del__(self):
+        self.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+        return False
+
     def _build_fp(self) -> Dict[str, str]:
         account = self.account
         raw_fp = account.get("fp")
@@ -236,7 +243,7 @@ class OpenAIBackendAPI:
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0",
         )
-        fp.setdefault("impersonate", "edge101")
+        fp.setdefault("impersonate", "chrome110")
         fp.setdefault("oai-device-id", new_uuid())
         fp.setdefault("oai-session-id", new_uuid())
         fp.setdefault("sec-ch-ua", '"Microsoft Edge";v="143", "Chromium";v="143", "Not A(Brand";v="24"')
@@ -488,9 +495,26 @@ class OpenAIBackendAPI:
             })
         return conversation_messages
 
-    def _conversation_payload(self, messages: list[Dict[str, Any]], model: str, timezone: str) -> Dict[str, Any]:
+    @staticmethod
+    def _normalize_thinking_effort(value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in {"", "none"}:
+            return ""
+        if normalized in {"low", "medium", "high"}:
+            return normalized
+        if normalized in {"xhigh", "extended"}:
+            return "extended"
+        return ""
+
+    def _conversation_payload(
+            self,
+            messages: list[Dict[str, Any]],
+            model: str,
+            timezone: str,
+            thinking_effort: str = "",
+    ) -> Dict[str, Any]:
         """把标准 messages 构造成 web 对话请求体。"""
-        return {
+        payload = {
             "action": "next",
             "messages": self._api_messages_to_conversation_messages(messages),
             "model": model,
@@ -520,6 +544,10 @@ class OpenAIBackendAPI:
                 "screen_width": 2560,
             },
         }
+        normalized_effort = self._normalize_thinking_effort(thinking_effort)
+        if normalized_effort:
+            payload["thinking_effort"] = normalized_effort
+        return payload
 
     def _image_model_slug(self, model: str) -> str:
         """把标准图片模型名映射到底层 model slug。"""
@@ -747,7 +775,7 @@ class OpenAIBackendAPI:
                 "type": "image_generation",
                 "model": "gpt-image-2",
                 "action": "edit" if images else "generate",
-                "size": clamp_codex_image_size(size),
+                "size": str(size or "1024x1024"),
                 "quality": str(quality or "auto"),
                 "output_format": "png",
             }],
@@ -999,6 +1027,24 @@ class OpenAIBackendAPI:
         path = f"/backend-api/conversation/{conversation_id}"
         response = self.session.get(self.base_url + path, headers=self._headers(path, {"Accept": "application/json"}),
                                     timeout=60)
+        ensure_ok(response, path)
+        return response.json()
+
+    def delete_conversation(self, conversation_id: str) -> Dict[str, Any]:
+        """删除本地对话记录。"""
+        path = f"/backend-api/conversation/{conversation_id}"
+        headers = self._headers(path, {
+            "Accept": "*/*",
+            "Content-Type": "application/json",
+            "Referer": f"{self.base_url}/c/{conversation_id}",
+            "X-OpenAI-Target-Route": "/backend-api/conversation/{conversation_id}",
+        })
+        response = self.session.patch(
+            self.base_url + path,
+            headers=headers,
+            json={"is_visible": False},
+            timeout=60,
+        )
         ensure_ok(response, path)
         return response.json()
 
@@ -2493,6 +2539,7 @@ class OpenAIBackendAPI:
             prompt: str = "",
             images: Optional[list[str]] = None,
             system_hints: Optional[list[str]] = None,
+            thinking_effort: str = "",
     ) -> Iterator[str]:
         system_hints = system_hints or []
         if "picture_v2" in system_hints:
@@ -2503,7 +2550,7 @@ class OpenAIBackendAPI:
         self._bootstrap()
         requirements = self._get_chat_requirements()
         path, timezone = self._chat_target()
-        payload = self._conversation_payload(normalized, model, timezone)
+        payload = self._conversation_payload(normalized, model, timezone, thinking_effort=thinking_effort)
         response = self.session.post(
             self.base_url + path,
             headers=self._conversation_headers(path, requirements),
@@ -2562,22 +2609,65 @@ class OpenAIBackendAPI:
             self.pow_script_sources = [DEFAULT_POW_SCRIPT]
 
     def _get_chat_requirements(self) -> ChatRequirements:
-        """获取当前模式对话所需的 sentinel token。"""
-        path = "/backend-api/sentinel/chat-requirements" if self.access_token else "/backend-anon/sentinel/chat-requirements"
-        context = "auth_chat_requirements" if self.access_token else "noauth_chat_requirements"
-        body = {"p": build_legacy_requirements_token(self.user_agent, self.pow_script_sources, self.pow_data_build)}
+        """获取当前模式对话所需的 sentinel token（prepare + finalize 两步流程）。"""
+        base = "/backend-api/sentinel/chat-requirements" if self.access_token else "/backend-anon/sentinel/chat-requirements"
+        p_token = build_legacy_requirements_token(self.user_agent, self.pow_script_sources, self.pow_data_build)
+
+        prepare_path = base + "/prepare"
         response = self.session.post(
-            self.base_url + path,
-            headers=self._headers(path, {"Content-Type": "application/json"}),
-            json=body,
+            self.base_url + prepare_path,
+            headers=self._headers(prepare_path, {"Content-Type": "application/json"}),
+            json={"p": p_token},
             timeout=30,
         )
-        ensure_ok(response, context)
-        requirements = self._build_requirements(response.json(), "" if self.access_token else body["p"])
-        if not requirements.token:
+        ensure_ok(response, "chat_requirements_prepare")
+        prepare_data = response.json()
+
+        if (prepare_data.get("arkose") or {}).get("required"):
+            raise RuntimeError("chat requirements requires arkose token, which is not implemented")
+
+        proof_token = ""
+        proof_info = prepare_data.get("proofofwork") or {}
+        if proof_info.get("required"):
+            proof_token = build_proof_token(
+                proof_info.get("seed", ""),
+                proof_info.get("difficulty", ""),
+                self.user_agent,
+                script_sources=self.pow_script_sources,
+                data_build=self.pow_data_build,
+            )
+
+        turnstile_token = ""
+        turnstile_info = prepare_data.get("turnstile") or {}
+        if turnstile_info.get("required") and turnstile_info.get("dx"):
+            turnstile_token = solve_turnstile_token(turnstile_info["dx"], p_token) or ""
+
+        finalize_path = base + "/finalize"
+        response = self.session.post(
+            self.base_url + finalize_path,
+            headers=self._headers(finalize_path, {"Content-Type": "application/json"}),
+            json={
+                "prepare_token": prepare_data.get("prepare_token", ""),
+                "proof_token": proof_token,
+                "turnstile_token": turnstile_token,
+            },
+            timeout=30,
+        )
+        ensure_ok(response, "chat_requirements_finalize")
+        data = response.json()
+
+        token = data.get("token", "")
+        if not token:
             message = "missing auth chat requirements token" if self.access_token else "missing chat requirements token"
-            raise RuntimeError(f"{message}: {requirements.raw_finalize}")
-        return requirements
+            raise RuntimeError(f"{message}: {data}")
+
+        return ChatRequirements(
+            token=token,
+            proof_token=proof_token,
+            turnstile_token=turnstile_token,
+            so_token=data.get("so_token", ""),
+            raw_finalize=data,
+        )
 
     def _chat_target(self) -> tuple[str, str]:
         if self.access_token:

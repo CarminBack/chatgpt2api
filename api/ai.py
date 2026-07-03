@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
@@ -7,7 +9,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from api.image_inputs import parse_image_edit_request, read_image_sources
 from api.support import require_identity, resolve_image_base_url
-from services.auth_service import ImageQuotaExceeded, auth_service
 from services.content_filter import check_request, request_shape, request_text
 from services.editable_file_task_service import editable_file_task_service
 from services.log_service import LoggedCall
@@ -20,11 +21,12 @@ from services.protocol import (
     openai_v1_response,
     openai_search,
 )
+from services.sub2api_billing_service import Sub2APIBillingError, sub2api_billing_service
 
 
 class ImageGenerationRequest(BaseModel):
     prompt: str = Field(..., min_length=1)
-    model: str = "team-codex-gpt-image-2"
+    model: str = "gpt-image-2"
     n: int = Field(default=1, ge=1, le=4)
     size: str | None = None
     quality: str = "auto"
@@ -78,22 +80,75 @@ async def filter_or_log(call: LoggedCall, text: str) -> None:
         raise
 
 
+def _clean(value: object, default: str = "") -> str:
+    return str(value or default).strip()
+
+
+def _token_value(identity: dict[str, object]) -> str:
+    return _clean(identity.get("token"))
+
+
+def _should_bill_sub2api(identity: dict[str, object]) -> bool:
+    return bool("sub2api" in str(identity.get("source") or "") and _token_value(identity))
+
+
 def create_router() -> APIRouter:
     router = APIRouter()
 
-    async def run_image_call_with_quota(identity: dict[str, object], amount: int, call: LoggedCall, handler, payload):
-        quota_reserved = False
+    async def run_image_call_with_billing(
+        identity: dict[str, object],
+        image_count: int,
+        call: LoggedCall,
+        handler,
+        payload: dict[str, object],
+    ):
+        token = _token_value(identity)
+        mode = "edit" if call.endpoint.endswith("/edits") else "generate"
+        model = _clean(payload.get("model"), call.model)
+        task_id = _clean(payload.get("client_task_id")) or f"{int(call.started * 1000)}-{mode}"
+        prompt_preview = request_text(payload.get("prompt"))
+        charged_amount = Decimal("0")
         try:
-            quota_reserved = auth_service.reserve_image_quota(identity, amount)
+            if _should_bill_sub2api(identity):
+                _, unit_price, charged_amount, _ = await run_in_threadpool(
+                    sub2api_billing_service.debit_image_balance,
+                    raw_key=token,
+                    image_count=image_count,
+                    size=_clean(payload.get("size")) or None,
+                    task_id=task_id,
+                    mode=mode,
+                    model=model,
+                    prompt_preview=prompt_preview,
+                )
+                if charged_amount <= 0 or unit_price <= 0:
+                    raise Sub2APIBillingError("图片单价未配置")
             result = await call.run(handler, payload)
-            if quota_reserved and getattr(result, "status_code", 200) >= 400:
-                auth_service.refund_image_quota(str(identity.get("id") or ""), amount)
+            if charged_amount > 0 and getattr(result, "status_code", 200) >= 400:
+                await run_in_threadpool(
+                    sub2api_billing_service.refund_user_balance,
+                    raw_key=token,
+                    amount=charged_amount,
+                    task_id=task_id,
+                    mode=mode,
+                    model=model,
+                    prompt_preview=prompt_preview,
+                    error=f"HTTP {getattr(result, 'status_code', '')}",
+                )
             return result
-        except ImageQuotaExceeded as exc:
-            raise HTTPException(status_code=429, detail={"error": str(exc)}) from exc
+        except Sub2APIBillingError as exc:
+            raise HTTPException(status_code=402, detail={"error": str(exc)}) from exc
         except Exception:
-            if quota_reserved:
-                auth_service.refund_image_quota(str(identity.get("id") or ""), amount)
+            if charged_amount > 0:
+                await run_in_threadpool(
+                    sub2api_billing_service.refund_user_balance,
+                    raw_key=token,
+                    amount=charged_amount,
+                    task_id=task_id,
+                    mode=mode,
+                    model=model,
+                    prompt_preview=prompt_preview,
+                    error="调用异常，自动退款",
+                )
             raise
 
     @router.get("/v1/models")
@@ -115,7 +170,7 @@ def create_router() -> APIRouter:
         payload["base_url"] = resolve_image_base_url(request)
         call = LoggedCall(identity, "/v1/images/generations", body.model, "文生图", request_text=body.prompt)
         await filter_or_log(call, body.prompt)
-        return await run_image_call_with_quota(identity, body.n, call, openai_v1_image_generations.handle, payload)
+        return await run_image_call_with_billing(identity, body.n, call, openai_v1_image_generations.handle, payload)
 
     @router.post("/v1/images/edits")
     async def edit_images(
@@ -123,15 +178,17 @@ def create_router() -> APIRouter:
             authorization: str | None = Header(default=None),
     ):
         identity = require_identity(authorization)
-        payload, image_sources = await parse_image_edit_request(request)
+        payload, image_sources, mask_sources = await parse_image_edit_request(request)
         prompt = str(payload["prompt"])
         model = str(payload["model"])
-        n = int(payload.get("n") or 1)
+        image_count = int(payload.get("n") or 1)
         call = LoggedCall(identity, "/v1/images/edits", model, "图生图", request_text=prompt)
         await filter_or_log(call, prompt)
         payload["images"] = await read_image_sources(image_sources)
+        if mask_sources:
+            payload["mask"] = await read_image_sources(mask_sources)
         payload["base_url"] = resolve_image_base_url(request)
-        return await run_image_call_with_quota(identity, n, call, openai_v1_image_edit.handle, payload)
+        return await run_image_call_with_billing(identity, image_count, call, openai_v1_image_edit.handle, payload)
 
     @router.post("/v1/chat/completions")
     async def create_chat_completion(body: ChatCompletionRequest, authorization: str | None = Header(default=None)):

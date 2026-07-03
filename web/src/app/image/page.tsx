@@ -21,7 +21,6 @@ import {
   createImageEditTask,
   createImageGenerationTask,
   fetchAccounts,
-  fetchAuthProfile,
   fetchModels,
   fetchImageTasks,
   resumeImagePoll,
@@ -56,23 +55,6 @@ const IMAGE_MODEL_STORAGE_KEY = "chatgpt2api:image_last_model";
 const IMAGE_COUNT_STORAGE_KEY = "chatgpt2api:image_last_count";
 const SCROLL_POSITIONS_STORAGE_KEY = "chatgpt2api:image_scroll_positions";
 const SCROLL_TO_LATEST_THRESHOLD = 160;
-const DEFAULT_IMAGE_MODEL: ImageModel = "gpt-image-2";
-const IMAGE_MODEL_PRIORITY = ["gpt-image-2", "team-codex-gpt-image-2", "codex-gpt-image-2"];
-const DEFAULT_IMAGE_RATIO = "1:1";
-const DEFAULT_IMAGE_TIER = "1k";
-const IMAGE_DIMENSION_PRESETS = {
-  "1:1": { width: { "1k": "1024", "2k": "2048", "4k": "3840" }, height: { "1k": "1024", "2k": "2048", "4k": "3840" } },
-  "2:3": { width: { "1k": "1024", "2k": "1440", "4k": "2160" }, height: { "1k": "1536", "2k": "2160", "4k": "3240" } },
-  "3:2": { width: { "1k": "1536", "2k": "2160", "4k": "3240" }, height: { "1k": "1024", "2k": "1440", "4k": "2160" } },
-  "3:4": { width: { "1k": "1024", "2k": "1536", "4k": "2304" }, height: { "1k": "1365", "2k": "2048", "4k": "3072" } },
-  "4:3": { width: { "1k": "1365", "2k": "2048", "4k": "3072" }, height: { "1k": "1024", "2k": "1536", "4k": "2304" } },
-  "9:16": { width: { "1k": "1088", "2k": "1440", "4k": "2160" }, height: { "1k": "1920", "2k": "2560", "4k": "3840" } },
-  "16:9": { width: { "1k": "1920", "2k": "2560", "4k": "3840" }, height: { "1k": "1088", "2k": "1440", "4k": "2160" } },
-  auto: { width: { "1k": "1024", "2k": "2048", "4k": "3840" }, height: { "1k": "1024", "2k": "2048", "4k": "3840" } },
-} as const;
-
-type ImagePresetRatio = keyof typeof IMAGE_DIMENSION_PRESETS;
-type ImagePresetTier = keyof (typeof IMAGE_DIMENSION_PRESETS)[ImagePresetRatio]["width"];
 
 function loadScrollPositions(): Map<string, number> {
   if (typeof window === "undefined") return new Map();
@@ -100,16 +82,6 @@ function saveScrollPositions(positions: Map<string, number>) {
 function clampImageCount(value: string) {
   return String(Math.min(100, Math.max(1, Math.floor(Number(value) || 1))));
 }
-
-function getPresetImageSize(ratio: string | null, tier: string | null) {
-  const presetRatio = ratio && ratio in IMAGE_DIMENSION_PRESETS ? (ratio as ImagePresetRatio) : DEFAULT_IMAGE_RATIO;
-  const presetTier = tier && tier in IMAGE_DIMENSION_PRESETS[presetRatio].width ? (tier as ImagePresetTier) : DEFAULT_IMAGE_TIER;
-  return {
-    width: IMAGE_DIMENSION_PRESETS[presetRatio].width[presetTier],
-    height: IMAGE_DIMENSION_PRESETS[presetRatio].height[presetTier],
-  };
-}
-
 function parseImageSize(size: string) {
   const match = size.match(/^(\d+)x(\d+)$/);
   return match ? { width: match[1], height: match[2] } : { width: "1024", height: "1024" };
@@ -148,15 +120,6 @@ function formatAvailableQuota(accounts: Account[]) {
   return String(availableAccounts.reduce((sum, account) => sum + Math.max(0, account.quota), 0));
 }
 
-function formatUserImageQuota(profile: { image_quota?: number; image_used?: number; image_remaining?: number | null }) {
-  const quota = Math.max(0, Number(profile.image_quota) || 0);
-  if (quota <= 0) {
-    return "不限";
-  }
-  const remaining = profile.image_remaining ?? Math.max(0, quota - Math.max(0, Number(profile.image_used) || 0));
-  return String(Math.max(0, Number(remaining) || 0));
-}
-
 function createId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
@@ -182,17 +145,9 @@ function dataUrlToFile(dataUrl: string, fileName: string, mimeType?: string) {
 }
 
 function filterImageModels(items: Model[]): ImageModel[] {
-  const models = items
+  return items
     .map((item) => String(item.id || "").trim())
     .filter((id, index, list) => id.toLowerCase().includes("image") && list.indexOf(id) === index);
-  return models.sort((a, b) => {
-    const ai = IMAGE_MODEL_PRIORITY.indexOf(a);
-    const bi = IMAGE_MODEL_PRIORITY.indexOf(b);
-    if (ai !== -1 || bi !== -1) {
-      return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
-    }
-    return a.localeCompare(b);
-  });
 }
 
 function normalizeStoredImageModel(value: string | null, availableModels: ImageModel[]): ImageModel {
@@ -200,10 +155,7 @@ function normalizeStoredImageModel(value: string | null, availableModels: ImageM
   if (normalized && availableModels.includes(normalized)) {
     return normalized;
   }
-  if (availableModels.includes(DEFAULT_IMAGE_MODEL)) {
-    return DEFAULT_IMAGE_MODEL;
-  }
-  return availableModels[0] || DEFAULT_IMAGE_MODEL;
+  return availableModels[0] || "gpt-image-2";
 }
 
 function buildReferenceImageFromResult(image: StoredImage, fileName: string): StoredReferenceImage | null {
@@ -348,6 +300,23 @@ function deriveTurnStatus(turn: ImageTurn): Pick<ImageTurn, "status" | "error"> 
   return { status: "success", error: undefined };
 }
 
+function finalizeIdleQueuedTurn(turn: ImageTurn): ImageTurn {
+  if (
+    (turn.status !== "queued" && turn.status !== "generating") ||
+    turn.images.some((image) => image.status === "loading")
+  ) {
+    return turn;
+  }
+  const derived = deriveTurnStatus(turn);
+  if (derived.status === turn.status && derived.error === turn.error) {
+    return turn;
+  }
+  return {
+    ...turn,
+    ...derived,
+  };
+}
+
 async function syncConversationImageTasks(items: ImageConversation[]) {
   const taskIds = Array.from(
     new Set(
@@ -443,15 +412,16 @@ async function recoverConversationHistory(items: ImageConversation[]) {
           error: "页面刷新或任务中断，未找到可恢复的任务 ID",
         };
       });
-      const derived = deriveTurnStatus({ ...turn, images });
-      if (!turnChanged && derived.status === turn.status && derived.error === turn.error) {
+      const candidateTurn = turnChanged ? { ...turn, images } : turn;
+      const nextTurn = finalizeIdleQueuedTurn(candidateTurn);
+      const derived = turnChanged ? deriveTurnStatus(nextTurn) : { status: nextTurn.status, error: nextTurn.error };
+      if (!turnChanged && nextTurn === turn && derived.status === turn.status && derived.error === turn.error) {
         return turn;
       }
       changed = true;
       return {
-        ...turn,
+        ...nextTurn,
         ...derived,
-        images,
       };
     });
 
@@ -499,8 +469,8 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   const [imageWidth, setImageWidth] = useState("1024");
   const [imageHeight, setImageHeight] = useState("1024");
   const [imageQuality, setImageQuality] = useState("auto");
-  const [imageModel, setImageModel] = useState<ImageModel>(DEFAULT_IMAGE_MODEL);
-  const [imageModels, setImageModels] = useState<ImageModel[]>([DEFAULT_IMAGE_MODEL]);
+  const [imageModel, setImageModel] = useState<ImageModel>("gpt-image-2");
+  const [imageModels, setImageModels] = useState<ImageModel[]>(["gpt-image-2"]);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [referenceImageFiles, setReferenceImageFiles] = useState<File[]>([]);
   const [referenceImages, setReferenceImages] = useState<StoredReferenceImage[]>([]);
@@ -642,13 +612,10 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         typeof window !== "undefined" ? window.localStorage.getItem(IMAGE_QUALITY_STORAGE_KEY) : null;
       const storedCount =
         typeof window !== "undefined" ? window.localStorage.getItem(IMAGE_COUNT_STORAGE_KEY) : null;
-      const imageRatio = storedRatio || DEFAULT_IMAGE_RATIO;
-      const imageTier = storedTier && storedTier !== "auto" ? storedTier : DEFAULT_IMAGE_TIER;
-      const imageSize = getPresetImageSize(imageRatio, imageTier);
-      setImageRatio(imageRatio);
-      setImageTier(imageTier);
-      setImageWidth(imageSize.width);
-      setImageHeight(imageSize.height);
+      setImageRatio(storedRatio || "1:1");
+      setImageTier(storedTier || "1k");
+      setImageWidth("1024");
+      setImageHeight("1024");
       setImageQuality(storedQuality || "auto");
       setImageCount(storedCount ? clampImageCount(storedCount) : "1");
 
@@ -738,7 +705,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         });
       } catch {
         if (!cancelled) {
-          setImageModels([DEFAULT_IMAGE_MODEL]);
+          setImageModels(["gpt-image-2"]);
         }
       }
     };
@@ -749,21 +716,14 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     };
   }, []);
 
-  useEffect(() => {
-    if (imageTier !== "2k" && imageTier !== "4k") {
-      setImageModel(DEFAULT_IMAGE_MODEL);
-    }
-  }, [imageTier]);
-
   const loadQuota = useCallback(async () => {
+    if (!isAdmin) {
+      setAvailableQuota("--");
+      return;
+    }
     try {
-      if (isAdmin) {
-        const data = await fetchAccounts();
-        setAvailableQuota(formatAvailableQuota(data.items));
-        return;
-      }
-      const profile = await fetchAuthProfile();
-      setAvailableQuota(formatUserImageQuota(profile));
+      const data = await fetchAccounts();
+      setAvailableQuota(formatAvailableQuota(data.items));
     } catch {
       setAvailableQuota((prev) => (prev === "加载中..." ? "--" : prev));
     }
@@ -997,16 +957,24 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         if (turn.id !== turnId) {
           return turn;
         }
+        const images =
+          part === "results"
+            ? turn.images.map((image) => ({ id: image.id, status: "error" as const, error: "生成结果已删除" }))
+            : turn.images;
+        const derived =
+          part === "results"
+            ? deriveTurnStatus({
+                ...turn,
+                images,
+              })
+            : { status: turn.status, error: turn.error };
         const nextTurn = {
           ...turn,
           prompt: part === "prompt" ? "" : turn.prompt,
           promptDeleted: part === "prompt" ? true : turn.promptDeleted,
           resultsDeleted: part === "results" ? true : turn.resultsDeleted,
-          status: part === "results" && turn.status === "generating" ? "error" as const : turn.status,
-          images:
-            part === "results"
-              ? turn.images.map((image) => ({ id: image.id, status: "error" as const, error: "生成结果已删除" }))
-              : turn.images,
+          ...derived,
+          images,
         };
         return nextTurn.promptDeleted && nextTurn.resultsDeleted ? null : nextTurn;
       })
@@ -1362,7 +1330,6 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
             ),
           };
         });
-        await loadQuota();
         toast.error(message);
       } finally {
         activeConversationQueueIds.delete(conversationId);
@@ -1520,13 +1487,14 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         turns: conversation.turns.map((turn) => {
           const hasLoading = turn.images.some((image) => image.status === "loading" && image.taskId === taskId);
           if (!hasLoading) return turn;
+          const images = turn.images.map((image) =>
+            image.taskId === taskId ? { ...image, status: "error" as const, error: taskError } : image,
+          );
+          const derived = deriveTurnStatus({ ...turn, images });
           return {
             ...turn,
-            status: "error" as const,
-            error: taskError,
-            images: turn.images.map((image) =>
-              image.taskId === taskId ? { ...image, status: "error" as const, error: taskError } : image,
-            ),
+            ...derived,
+            images,
           };
         }),
       };
@@ -1584,7 +1552,6 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     }
 
     const effectiveImageMode: ImageConversationMode = referenceImageFiles.length > 0 ? "edit" : "generate";
-    const effectiveImageModel = imageTier === "2k" || imageTier === "4k" ? imageModel : DEFAULT_IMAGE_MODEL;
 
     const targetConversation = selectedConversationId
       ? conversationsRef.current.find((conversation) => conversation.id === selectedConversationId) ?? null
@@ -1592,12 +1559,11 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     const now = new Date().toISOString();
     const conversationId = targetConversation?.id ?? createId();
     const turnId = createId();
-    const clampImageDimension = (value: string) => Math.max(1, Math.min(3840, Math.floor(Number(value) || 1024)));
-    const imageSize = `${clampImageDimension(imageWidth)}x${clampImageDimension(imageHeight)}`;
+    const imageSize = `${imageWidth || 1024}x${imageHeight || 1024}`;
     const draftTurn: ImageTurn = {
       id: turnId,
       prompt,
-      model: effectiveImageModel,
+      model: imageModel,
       mode: effectiveImageMode,
       referenceImages: effectiveImageMode === "edit" ? referenceImages : [],
       count: parsedCount,

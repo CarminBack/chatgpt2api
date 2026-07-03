@@ -9,12 +9,11 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from services.auth_service import auth_service
 from services.config import DATA_DIR, config
 from services.content_filter import request_text
 from services.log_service import LOG_TYPE_CALL, log_service
 from services.protocol import openai_v1_image_edit, openai_v1_image_generations
-from services.sub2api_billing_service import Sub2APIBillingError, sub2api_billing_service
+from services.sub2api_billing_service import sub2api_billing_service
 
 TASK_STATUS_QUEUED = "queued"
 TASK_STATUS_RUNNING = "running"
@@ -54,65 +53,8 @@ def _token_value(identity: dict[str, object]) -> str:
     return _clean(identity.get("token"))
 
 
-def _should_use_sub2api_balance(identity: dict[str, object]) -> bool:
-    return bool(config.sub2api_billing_enabled and identity.get("source") == "sub2api" and _token_value(identity))
-
-
-def _image_price_decimal() -> Decimal:
-    return Decimal(str(config.image_price_per_request or 0))
-
-
-def _reserve_generation_credit(identity: dict[str, object], *, task_id: str, mode: str, model: str, prompt_preview: str) -> tuple[str, dict[str, Any]]:
-    if identity.get("role") != "user":
-        return "none", {}
-    if auth_service.reserve_image_quota(identity, 1):
-        return "quota", {}
-    if not _should_use_sub2api_balance(identity):
-        raise ImageQuotaExceeded("图片生成额度已用完，且该秘钥未接入 sub2api 余额扣费")
-    token = _token_value(identity)
-    if not token:
-        raise ImageQuotaExceeded("图片生成额度已用完，且缺少 sub2api 计费凭证")
-    price = _image_price_decimal()
-    if price <= 0:
-        raise ImageQuotaExceeded("图片生成额度已用完，且图片单价未配置")
-    billing_identity, balance_after = sub2api_billing_service.debit_user_balance(
-        raw_key=token,
-        amount=price,
-        task_id=task_id,
-        mode=mode,
-        model=model,
-        prompt_preview=prompt_preview,
-    )
-    return "balance", {
-        "charged_amount": str(price),
-        "balance_after": str(balance_after),
-        "sub2api_user_email": billing_identity.user_email,
-    }
-
-
-def _refund_generation_credit(task: dict[str, Any] | None) -> None:
-    if not task:
-        return
-    credit_mode = _clean(task.get("credit_mode"))
-    if credit_mode == "quota":
-        auth_service.refund_image_quota(_clean(task.get("owner_id")), 1)
-        task["quota_reserved"] = False
-        return
-    if credit_mode == "balance":
-        token = _clean(task.get("owner_token"))
-        amount = task.get("charged_amount")
-        if token and amount:
-            sub2api_billing_service.refund_user_balance(
-                raw_key=token,
-                amount=Decimal(str(amount)),
-                task_id=_clean(task.get("id")),
-                mode=_clean(task.get("mode")),
-                model=_clean(task.get("model")),
-                prompt_preview="",
-                error=_clean(task.get("error")),
-            )
-        task["charged_amount"] = None
-        return
+def _should_bill_sub2api(identity: dict[str, object]) -> bool:
+    return bool("sub2api" in str(identity.get("source") or "") and _token_value(identity))
 
 
 def _task_key(owner_id: str, task_id: str) -> str:
@@ -220,10 +162,12 @@ class ImageTaskService:
         quality: str = "auto",
         base_url: str = "",
         images: list[tuple[bytes, str, str]] | None = None,
+        masks: list[tuple[bytes, str, str]] | None = None,
     ) -> dict[str, Any]:
         payload = {
             "prompt": prompt,
             "images": images or [],
+            "mask": masks or [],
             "model": model,
             "n": 1,
             "size": size,
@@ -270,6 +214,8 @@ class ImageTaskService:
             raise ValueError("client_task_id is required")
         owner = _owner_id(identity)
         key = _task_key(owner, task_id)
+        billing_amount = Decimal("0")
+        billing_token = ""
         now = _now_iso()
         should_start = False
         with self._lock:
@@ -279,29 +225,28 @@ class ImageTaskService:
                 if cleaned:
                     self._save_locked()
                 return _public_task(task)
-            credit_mode, credit_meta = _reserve_generation_credit(
-                identity,
-                task_id=task_id,
-                mode=mode,
-                model=_clean(payload.get("model"), "team-codex-gpt-image-2"),
-                prompt_preview=request_text(payload.get("prompt")),
-            )
-            quota_reserved = credit_mode == "quota"
+            if _should_bill_sub2api(identity):
+                billing_token = _token_value(identity)
+                _, _, billing_amount, _ = sub2api_billing_service.debit_image_balance(
+                    raw_key=billing_token,
+                    image_count=int(payload.get("n") or 1),
+                    size=_clean(payload.get("size")) or None,
+                    task_id=task_id,
+                    mode=mode,
+                    model=_clean(payload.get("model"), "gpt-image-2"),
+                    prompt_preview=request_text(payload.get("prompt")),
+                )
             task = {
                 "id": task_id,
                 "owner_id": owner,
                 "status": TASK_STATUS_QUEUED,
                 "mode": mode,
-                "model": _clean(payload.get("model"), "team-codex-gpt-image-2"),
+                "model": _clean(payload.get("model"), "gpt-image-2"),
                 "size": _clean(payload.get("size")),
                 "quality": _clean(payload.get("quality"), "auto"),
                 "created_at": now,
                 "updated_at": now,
                 "created_ts": time.time(),
-                "quota_reserved": quota_reserved,
-                "credit_mode": credit_mode,
-                "owner_token": _token_value(identity),
-                **credit_meta,
             }
             self._tasks[key] = task
             self._save_locked()
@@ -310,7 +255,15 @@ class ImageTaskService:
         if should_start:
             thread = threading.Thread(
                 target=self._run_task,
-                args=(key, mode, payload, dict(identity), _clean(payload.get("model"), "team-codex-gpt-image-2")),
+                args=(
+                    key,
+                    mode,
+                    payload,
+                    dict(identity),
+                    _clean(payload.get("model"), "gpt-image-2"),
+                    billing_token,
+                    billing_amount,
+                ),
                 name=f"image-task-{task_id[:16]}",
                 daemon=True,
             )
@@ -324,6 +277,8 @@ class ImageTaskService:
         payload: dict[str, Any],
         identity: dict[str, object],
         model: str,
+        billing_token: str = "",
+        billing_amount: Decimal = Decimal("0"),
     ) -> None:
         started = time.time()
         self._update_task(key, status=TASK_STATUS_RUNNING, error="")
@@ -365,14 +320,22 @@ class ImageTaskService:
                 account_email=account_email,
             )
         except Exception as exc:
-            with self._lock:
-                task = self._tasks.get(key)
-                _refund_generation_credit(task)
-                if task is not None:
-                    task["credit_mode"] = "none"
             error_message = str(exc) or "image task failed"
             account_email = _clean(getattr(exc, "account_email", ""))
             conversation_id = _clean(getattr(exc, "conversation_id", ""))
+            if billing_token and billing_amount > 0:
+                try:
+                    sub2api_billing_service.refund_user_balance(
+                        raw_key=billing_token,
+                        amount=billing_amount,
+                        task_id=_clean(payload.get("client_task_id")) or _clean(self._tasks.get(key, {}).get("id")),
+                        mode=mode,
+                        model=model,
+                        prompt_preview=request_text(payload.get("prompt")),
+                        error=error_message,
+                    )
+                except Exception:
+                    pass
             duration_ms = int((time.time() - started) * 1000)
             self._update_task(key, status=TASK_STATUS_ERROR, error=error_message, data=[],
                               duration_ms=duration_ms,
@@ -465,7 +428,7 @@ class ImageTaskService:
                 "owner_id": owner,
                 "status": status,
                 "mode": "edit" if item.get("mode") == "edit" else "generate",
-                "model": _clean(item.get("model"), "team-codex-gpt-image-2"),
+                "model": _clean(item.get("model"), "gpt-image-2"),
                 "size": _clean(item.get("size")),
                 "quality": _clean(item.get("quality"), "auto"),
                 "created_at": _clean(item.get("created_at"), _now_iso()),
@@ -474,12 +437,6 @@ class ImageTaskService:
                 "updated_ts": item.get("updated_ts"),
                 "started_ts": item.get("started_ts"),
                 "duration_ms": item.get("duration_ms"),
-                "quota_reserved": bool(item.get("quota_reserved", False)),
-                "credit_mode": _clean(item.get("credit_mode")),
-                "owner_token": _clean(item.get("owner_token")),
-                "charged_amount": item.get("charged_amount"),
-                "balance_after": item.get("balance_after"),
-                "sub2api_user_email": _clean(item.get("sub2api_user_email")),
             }
             data = item.get("data")
             if isinstance(data, list):
@@ -503,10 +460,8 @@ class ImageTaskService:
         changed = False
         for task in self._tasks.values():
             if task.get("status") in UNFINISHED_STATUSES:
-                _refund_generation_credit(task)
-                task["credit_mode"] = "none"
-                task["error"] = "服务已重启，未完成的图片任务已中断"
                 task["status"] = TASK_STATUS_ERROR
+                task["error"] = "服务已重启，未完成的图片任务已中断"
                 task["updated_at"] = _now_iso()
                 changed = True
         return changed
@@ -548,7 +503,7 @@ class ImageTaskService:
             if not conversation_id:
                 raise ValueError("task has no conversation_id")
             mode = task.get("mode", "generate")
-            model = task.get("model", "team-codex-gpt-image-2")
+            model = task.get("model", "gpt-image-2")
             # 将任务状态重置为 running
             self._update_task(key, status=TASK_STATUS_RUNNING, error="")
 
@@ -573,6 +528,7 @@ class ImageTaskService:
     ) -> None:
         """后台线程：继续轮询已有 conversation_id 的图片结果。"""
         started = time.time()
+        backend = None
         try:
             from services.openai_backend_api import OpenAIBackendAPI
             from services.protocol.conversation import format_image_result
@@ -632,6 +588,9 @@ class ImageTaskService:
                 status="failed",
                 error=error_message,
             )
+        finally:
+            if backend is not None:
+                backend.close()
 
 
 image_task_service = ImageTaskService(DATA_DIR / "image_tasks.json")

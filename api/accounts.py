@@ -37,14 +37,11 @@ from services.sub2api_service import (
 
 class UserKeyCreateRequest(BaseModel):
     name: str = ""
-    image_quota: int = Field(default=0, ge=0)
 
 
 class UserKeyUpdateRequest(BaseModel):
     name: str | None = None
     enabled: bool | None = None
-    image_quota: int | None = Field(default=None, ge=0)
-    image_used: int | None = Field(default=None, ge=0)
     key: str | None = None
 
 
@@ -172,7 +169,7 @@ def create_router() -> APIRouter:
     async def create_user_key(body: UserKeyCreateRequest, authorization: str | None = Header(default=None)):
         require_admin(authorization)
         try:
-            item, raw_key = auth_service.create_key(role="user", name=body.name, image_quota=body.image_quota)
+            item, raw_key = auth_service.create_key(role="user", name=body.name)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
         return {"item": item, "key": raw_key, "items": auth_service.list_keys(role="user")}
@@ -189,8 +186,6 @@ def create_router() -> APIRouter:
             for key, value in {
                 "name": body.name,
                 "enabled": body.enabled,
-                "image_quota": body.image_quota,
-                "image_used": body.image_used,
                 "key": body.key,
             }.items()
             if value is not None

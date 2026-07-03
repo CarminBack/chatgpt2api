@@ -359,7 +359,7 @@ class AccountService:
         from curl_cffi import requests
         from services.proxy_service import proxy_settings
 
-        session = requests.Session(**proxy_settings.build_session_kwargs(account=account, impersonate="chrome", verify=True))
+        session = requests.Session(**proxy_settings.build_session_kwargs(account=account, impersonate="chrome110", verify=True))
         try:
             response = session.post(
                 self._OAUTH_TOKEN_URL,
@@ -1053,8 +1053,19 @@ class AccountService:
             return dict(account) if account else None
 
     def list_accounts(self) -> list[dict]:
+        """返回所有账号的副本，并为每个账号附加当前图片在途数 image_inflight。
+
+        image_inflight 为内存态并发计数(账号正在生成、尚未结束的图片数)。号池空闲时
+        若某账号该值持续 > 0，说明其并发槽位泄漏、已被静默排除出调度，可借此在 UI 上诊断。
+        """
         with self._lock:
-            return [dict(item) for item in self._accounts.values()]
+            result = []
+            for item in self._accounts.values():
+                account = dict(item)
+                token = account.get("access_token") or ""
+                account["image_inflight"] = int(self._image_inflight.get(token, 0))
+                result.append(account)
+            return result
 
     def list_limited_tokens(self) -> list[str]:
         with self._lock:
@@ -1062,6 +1073,15 @@ class AccountService:
                 token
                 for item in self._accounts.values()
                 if item.get("status") == "限流"
+                   and (token := item.get("access_token") or "")
+            ]
+
+    def list_normal_tokens(self) -> list[str]:
+        with self._lock:
+            return [
+                token
+                for item in self._accounts.values()
+                if item.get("status") == "正常"
                    and (token := item.get("access_token") or "")
             ]
 
@@ -1261,23 +1281,6 @@ class AccountService:
                 return False
         return True
 
-    def mark_account_rate_limited(self, access_token: str, error: str = "", restore_at: str | None = None, event: str = "image_limit") -> dict | None:
-        updates = {
-            "status": "限流",
-            "quota": 0,
-            "restore_at": restore_at or None,
-            "last_refresh_error": str(error or "rate limited")[:500],
-            "last_refresh_error_at": datetime.now(timezone.utc).isoformat(),
-        }
-        account = self.update_account(access_token, updates, quiet=True)
-        if account is not None:
-            log_service.add(
-                LOG_TYPE_ACCOUNT,
-                "标记限流账号",
-                {"source": event, "token": anonymize_token(access_token), "error": str(error or "")[:300]},
-            )
-        return account
-
     def mark_image_result(self, access_token: str, success: bool) -> dict | None:
         if not access_token:
             return None
@@ -1326,12 +1329,20 @@ class AccountService:
         active_token = self.refresh_access_token(access_token, event=f"{event}:preflight") or access_token
         try:
             from services.openai_backend_api import InvalidAccessTokenError, OpenAIBackendAPI
-            result = OpenAIBackendAPI(active_token).get_user_info()
+            backend = OpenAIBackendAPI(active_token)
+            try:
+                result = backend.get_user_info()
+            finally:
+                backend.close()
         except InvalidAccessTokenError as exc:
             refreshed_token = self.refresh_access_token(active_token, force=True, event=f"{event}:invalid_access_token")
             if refreshed_token and refreshed_token != active_token:
                 try:
-                    result = OpenAIBackendAPI(refreshed_token).get_user_info()
+                    backend = OpenAIBackendAPI(refreshed_token)
+                    try:
+                        result = backend.get_user_info()
+                    finally:
+                        backend.close()
                 except InvalidAccessTokenError as retry_exc:
                     if self._record_invalid_token_seen(
                         refreshed_token,
@@ -1459,7 +1470,6 @@ class AccountService:
         access_tokens: list[str],
         progress_id: str | None = None,
         defer_invalid_removal: bool = True,
-        max_workers: int | None = None,
     ) -> dict[str, Any]:
         access_tokens = list(dict.fromkeys(token for token in access_tokens if token))
         if not access_tokens:
@@ -1471,12 +1481,12 @@ class AccountService:
 
         refreshed = 0
         errors = []
-        worker_count = min(max(1, int(max_workers or 10)), len(access_tokens))
+        max_workers = min(10, len(access_tokens))
 
         if progress_id:
             self.init_refresh_progress(progress_id, len(access_tokens))
 
-        executor = ThreadPoolExecutor(max_workers=worker_count)
+        executor = ThreadPoolExecutor(max_workers=max_workers)
         try:
             futures = {
                 executor.submit(self.fetch_remote_info, token, "refresh_accounts", defer_invalid_removal): token

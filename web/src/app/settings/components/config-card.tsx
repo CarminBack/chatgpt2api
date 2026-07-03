@@ -23,17 +23,13 @@ export function ConfigCard() {
   const isLoadingConfig = useSettingsStore((state) => state.isLoadingConfig);
   const isSavingConfig = useSettingsStore((state) => state.isSavingConfig);
   const setRefreshAccountIntervalMinute = useSettingsStore((state) => state.setRefreshAccountIntervalMinute);
-  const setAccountFullRefreshEnabled = useSettingsStore((state) => state.setAccountFullRefreshEnabled);
-  const setAccountFullRefreshIntervalMinutes = useSettingsStore((state) => state.setAccountFullRefreshIntervalMinutes);
-  const setAccountFullRefreshConcurrency = useSettingsStore((state) => state.setAccountFullRefreshConcurrency);
   const setImageRetentionDays = useSettingsStore((state) => state.setImageRetentionDays);
   const setImagePollTimeoutSecs = useSettingsStore((state) => state.setImagePollTimeoutSecs);
   const setImageAccountConcurrency = useSettingsStore((state) => state.setImageAccountConcurrency);
   const setImageSettleEnabled = useSettingsStore((state) => state.setImageSettleEnabled);
+  const setImageRemoveConversationAfterResult = useSettingsStore((state) => state.setImageRemoveConversationAfterResult);
   const setImageSettleSecs = useSettingsStore((state) => state.setImageSettleSecs);
   const setImageTimeoutRetrySecs = useSettingsStore((state) => state.setImageTimeoutRetrySecs);
-  const setSub2apiBillingEnabled = useSettingsStore((state) => state.setSub2apiBillingEnabled);
-  const setImagePricePerRequest = useSettingsStore((state) => state.setImagePricePerRequest);
   const setAutoRemoveInvalidAccounts = useSettingsStore((state) => state.setAutoRemoveInvalidAccounts);
   const setAutoRemoveRateLimitedAccounts = useSettingsStore((state) => state.setAutoRemoveRateLimitedAccounts);
   const setAutoReloginAfterRefresh = useSettingsStore((state) => state.setAutoReloginAfterRefresh);
@@ -98,37 +94,7 @@ export function ConfigCard() {
               placeholder="分钟"
               className="h-10 rounded-xl border-stone-200 bg-white"
             />
-            <p className="text-xs text-stone-500">单位分钟，控制限流账号、快过期 access token 和 refresh token keepalive 的检查频率。</p>
-          </div>
-          <div className="space-y-2 rounded-xl border border-stone-200 bg-white px-4 py-3 md:col-span-2">
-            <label className="flex items-center gap-3 text-sm text-stone-700">
-              <Checkbox
-                checked={Boolean(config?.account_full_refresh_enabled !== false)}
-                onCheckedChange={(checked) => setAccountFullRefreshEnabled(Boolean(checked))}
-              />
-              启用低频全量刷新账号额度
-            </label>
-            <p className="text-xs text-stone-500">开启后会按下方间隔分批刷新所有账号额度，避免后台额度长期不准。</p>
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="space-y-2">
-                <label className="text-xs text-stone-500">全量刷新间隔（分钟）</label>
-                <Input
-                  value={String(config?.account_full_refresh_interval_minutes || "60")}
-                  onChange={(event) => setAccountFullRefreshIntervalMinutes(event.target.value)}
-                  placeholder="60"
-                  className="h-10 rounded-xl border-stone-200 bg-white"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs text-stone-500">全量刷新并发</label>
-                <Input
-                  value={String(config?.account_full_refresh_concurrency || "3")}
-                  onChange={(event) => setAccountFullRefreshConcurrency(event.target.value)}
-                  placeholder="3"
-                  className="h-10 rounded-xl border-stone-200 bg-white"
-                />
-              </div>
-            </div>
+            <p className="text-xs text-stone-500">单位分钟，控制账号自动刷新频率。</p>
           </div>
           <div className="space-y-2">
             <label className="text-sm text-stone-700">全局代理</label>
@@ -141,7 +107,9 @@ export function ConfigCard() {
               placeholder="http://127.0.0.1:7890"
               className="h-10 rounded-xl border-stone-200 bg-white"
             />
-            <p className="text-xs text-stone-500">留空表示不使用代理。</p>
+            <p className="text-xs leading-5 text-stone-500">
+              留空表示不使用代理。支持协议://账号:密码@主机:端口，也可直接粘贴代理商的 主机:端口:账号:密码；示例 http://user:pass@127.0.0.1:7890、127.0.0.1:7890:user:pass。账号密码含 @/: 等特殊字符时需 URL 编码。
+            </p>
             {proxyTestResult ? (
               <div
                 className={`rounded-xl border px-3 py-2 text-xs leading-6 ${
@@ -229,6 +197,16 @@ export function ConfigCard() {
             <p className="text-xs text-stone-500">打开后能稍微提升获取图片的成功率。</p>
           </div>
           <div className="space-y-2">
+            <div className="flex items-center gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3">
+              <Checkbox
+                checked={Boolean(config?.image_remove_conversation_after_result)}
+                onCheckedChange={(checked) => setImageRemoveConversationAfterResult(Boolean(checked))}
+              />
+              <span className="text-sm text-stone-700">出图后移除本地对话</span>
+            </div>
+            <p className="text-xs text-stone-500">成功拿到图片后，异步隐藏 ChatGPT 侧对应的本地对话记录。</p>
+          </div>
+          <div className="space-y-2">
             <label className="text-sm text-stone-700">图片超时继续等待时间</label>
             <Input
               value={String(config?.image_timeout_retry_secs || "30")}
@@ -295,28 +273,6 @@ export function ConfigCard() {
               className="min-h-28 rounded-xl border-stone-200 bg-white font-mono text-xs shadow-none"
             />
             <p className="text-xs text-stone-500">每次请求都会作为 system 消息注入，可用于审核用户提示词、避免违规内容、统一约束模型行为或固定角色设定。</p>
-          </div>
-          <div className="space-y-2 md:col-span-2">
-            <div className="rounded-xl border border-stone-200 bg-white px-4 py-3">
-              <label className="flex items-center gap-3 text-sm text-stone-700">
-                <Checkbox
-                  checked={Boolean(config?.sub2api_billing_enabled)}
-                  onCheckedChange={(checked) => setSub2apiBillingEnabled(Boolean(checked))}
-                />
-                启用 sub2api 余额扣图
-              </label>
-              <p className="mt-2 text-xs text-stone-500">开启后，普通用户图片生成会先扣本地图片次数额度，不足时再扣 sub2api 用户余额。</p>
-            </div>
-          </div>
-          <div className="space-y-2">
-            <label className="text-sm text-stone-700">每张图价格</label>
-            <Input
-              value={String(config?.image_price_per_request || "")}
-              onChange={(event) => setImagePricePerRequest(event.target.value)}
-              placeholder="0.2"
-              className="h-10 rounded-xl border-stone-200 bg-white"
-            />
-            <p className="text-xs text-stone-500">当本地图片次数额度不足时，按这个价格扣 sub2api 用户余额。</p>
           </div>
           <div className="space-y-2 md:col-span-2">
             <label className="text-sm text-stone-700">敏感词</label>

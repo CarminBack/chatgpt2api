@@ -24,8 +24,7 @@ from services.image_service import (
 from services.image_storage_service import ImageStorageError, image_storage_service
 from services.image_tags_service import delete_tag, get_all_tags, set_tags
 from services.log_service import log_service
-from services.proxy_service import test_proxy
-from services.sub2api_billing_service import sub2api_billing_service
+from services.proxy_service import proxy_settings, test_clearance, test_proxy
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -34,6 +33,10 @@ class SettingsUpdateRequest(BaseModel):
 
 class ProxyTestRequest(BaseModel):
     url: str = ""
+
+
+class ClearanceTestRequest(BaseModel):
+    target_url: str = "https://chatgpt.com"
 
 
 class ImageDeleteRequest(BaseModel):
@@ -55,34 +58,19 @@ class BackupDeleteRequest(BaseModel):
     key: str = ""
 
 
-def _auth_identity_payload(identity: dict[str, object], app_version: str) -> dict[str, object]:
-    image_quota = max(0, int(identity.get("image_quota") or 0))
-    image_used = max(0, int(identity.get("image_used") or 0))
-    image_remaining = max(0, image_quota - image_used) if image_quota > 0 else None
-    return {
-        "ok": True,
-        "version": app_version,
-        "role": identity.get("role"),
-        "subject_id": identity.get("id"),
-        "name": identity.get("name"),
-        "image_quota": image_quota,
-        "image_used": image_used,
-        "image_remaining": image_remaining,
-    }
-
-
 def create_router(app_version: str) -> APIRouter:
     router = APIRouter()
 
     @router.post("/auth/login")
     async def login(authorization: str | None = Header(default=None)):
         identity = require_identity(authorization)
-        return _auth_identity_payload(identity, app_version)
-
-    @router.get("/auth/me")
-    async def get_current_identity(authorization: str | None = Header(default=None)):
-        identity = require_identity(authorization)
-        return _auth_identity_payload(identity, app_version)
+        return {
+            "ok": True,
+            "version": app_version,
+            "role": identity.get("role"),
+            "subject_id": identity.get("id"),
+            "name": identity.get("name"),
+        }
 
     @router.get("/version")
     async def get_version():
@@ -92,6 +80,11 @@ def create_router(app_version: str) -> APIRouter:
     async def get_settings(authorization: str | None = Header(default=None)):
         require_admin(authorization)
         return {"config": config.get()}
+
+    @router.get("/api/third-party-apps")
+    async def get_third_party_apps(authorization: str | None = Header(default=None)):
+        require_identity(authorization)
+        return {"third_party_apps": config.get_third_party_apps_settings()}
 
     @router.post("/api/settings")
     async def save_settings(body: SettingsUpdateRequest, authorization: str | None = Header(default=None)):
@@ -139,28 +132,6 @@ def create_router(app_version: str) -> APIRouter:
         require_admin(authorization)
         return {"items": log_service.list(type=type.strip(), start_date=start_date.strip(), end_date=end_date.strip())}
 
-    @router.get("/api/image-billing-logs")
-    async def get_image_billing_logs(
-        user_email: str = "",
-        action: str = "",
-        status: str = "",
-        start_date: str = "",
-        end_date: str = "",
-        limit: int = 200,
-        authorization: str | None = Header(default=None),
-    ):
-        require_admin(authorization)
-        items = await run_in_threadpool(
-            sub2api_billing_service.list_logs,
-            limit=limit,
-            user_email=user_email,
-            action=action,
-            status=status,
-            start_date=start_date.strip(),
-            end_date=end_date.strip(),
-        )
-        return {"items": items}
-
     @router.post("/api/logs/delete")
     async def delete_logs(body: LogDeleteRequest, authorization: str | None = Header(default=None)):
         require_admin(authorization)
@@ -169,10 +140,32 @@ def create_router(app_version: str) -> APIRouter:
     @router.post("/api/proxy/test")
     async def test_proxy_endpoint(body: ProxyTestRequest, authorization: str | None = Header(default=None)):
         require_admin(authorization)
-        candidate = (body.url or "").strip() or config.get_proxy_settings()
-        if not candidate:
-            raise HTTPException(status_code=400, detail={"error": "proxy url is required"})
-        return {"result": await run_in_threadpool(test_proxy, candidate)}
+        return {"result": await run_in_threadpool(test_proxy, (body.url or "").strip())}
+
+    @router.get("/api/proxy/runtime")
+    async def get_proxy_runtime_endpoint(authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        return {
+            "runtime": config.get_public_proxy_runtime_settings(),
+            "status": proxy_settings.get_runtime_status(),
+        }
+
+    @router.post("/api/proxy/runtime")
+    async def save_proxy_runtime_endpoint(body: SettingsUpdateRequest, authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        try:
+            config.update({"proxy_runtime": body.model_dump(mode="python")})
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        return {
+            "runtime": config.get_public_proxy_runtime_settings(),
+            "status": proxy_settings.get_runtime_status(),
+        }
+
+    @router.post("/api/proxy/clearance/test")
+    async def test_proxy_clearance_endpoint(body: ClearanceTestRequest, authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        return {"result": await run_in_threadpool(test_clearance, body.target_url)}
 
     @router.get("/api/storage/info")
     async def get_storage_info(authorization: str | None = Header(default=None)):
@@ -313,6 +306,7 @@ def create_router(app_version: str) -> APIRouter:
             "healthy": healthy,
             "version": app_version,
             "storage": {"backend": storage.get_backend_info(), "health": storage_health},
+            "proxy_runtime": proxy_settings.get_runtime_status(),
             "accounts": stats,
         }
         if format == "json":

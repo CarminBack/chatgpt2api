@@ -46,8 +46,8 @@ def require_identity(authorization: str | None) -> dict[str, object]:
             "sub2api_key_id": billing_identity.key_id,
             "sub2api_user_id": billing_identity.user_id,
             "sub2api_user_email": billing_identity.user_email,
-            "image_quota": 0,
-            "image_used": 0,
+            "sub2api_group_id": billing_identity.group_id,
+            "sub2api_group_name": billing_identity.group_name,
         }
     if identity is None:
         raise HTTPException(status_code=401, detail={"error": "密钥无效或已失效，请重新登录"})
@@ -60,6 +60,8 @@ def require_identity(authorization: str | None) -> dict[str, object]:
         identity["sub2api_key_id"] = billing_identity.key_id
         identity["sub2api_user_id"] = billing_identity.user_id
         identity["sub2api_user_email"] = billing_identity.user_email
+        identity["sub2api_group_id"] = billing_identity.group_id
+        identity["sub2api_group_name"] = billing_identity.group_name
     return identity
 
 
@@ -114,15 +116,17 @@ def start_limited_account_watcher(stop_event: Event) -> Thread:
         while not stop_event.is_set():
             try:
                 limited_tokens = account_service.list_limited_tokens()
+                normal_tokens = account_service.list_normal_tokens()
                 expiring_tokens = account_service.list_expiring_access_tokens()
                 keepalive_tokens = account_service.list_refresh_token_keepalive_tokens()
-                tokens = list(dict.fromkeys([*limited_tokens, *expiring_tokens]))
+                tokens = list(dict.fromkeys([*limited_tokens, *normal_tokens, *expiring_tokens]))
                 expiring_token_set = set(expiring_tokens)
                 keepalive_tokens = [token for token in keepalive_tokens if token not in expiring_token_set]
                 if tokens:
                     print(
                         "[account-watcher] checking "
                         f"{len(limited_tokens)} limited accounts, "
+                        f"{len(normal_tokens)} normal accounts, "
                         f"{len(expiring_tokens)} expiring access tokens"
                     )
                     account_service.refresh_accounts(tokens)
@@ -136,38 +140,6 @@ def start_limited_account_watcher(stop_event: Event) -> Thread:
             stop_event.wait(interval_seconds)
 
     thread = Thread(target=worker, name="account-watcher", daemon=True)
-    thread.start()
-    return thread
-
-
-def start_full_account_refresh_watcher(stop_event: Event) -> Thread:
-    def worker() -> None:
-        # 避免服务刚启动就全量打上游；第一次按配置间隔后再执行。
-        while not stop_event.wait(config.account_full_refresh_interval_minutes * 60):
-            if not config.account_full_refresh_enabled:
-                continue
-            try:
-                tokens = [str(item.get("access_token") or "") for item in account_service.list_accounts()]
-                tokens = [token for token in dict.fromkeys(tokens) if token]
-                if not tokens:
-                    continue
-                print(
-                    "[account-full-refresh] refreshing "
-                    f"{len(tokens)} accounts with concurrency {config.account_full_refresh_concurrency}"
-                )
-                result = account_service.refresh_accounts(
-                    tokens,
-                    defer_invalid_removal=True,
-                    max_workers=config.account_full_refresh_concurrency,
-                )
-                print(
-                    "[account-full-refresh] done "
-                    f"refreshed={result.get('refreshed')} errors={len(result.get('errors') or [])}"
-                )
-            except Exception as exc:
-                print(f"[account-full-refresh] fail {exc}")
-
-    thread = Thread(target=worker, name="account-full-refresh", daemon=True)
     thread.start()
     return thread
 

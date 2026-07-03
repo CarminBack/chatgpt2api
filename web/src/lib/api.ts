@@ -34,6 +34,8 @@ export type Account = {
   restore_at?: string | null;
   success: number;
   fail: number;
+  /** 当前图片在途数(正在生成、尚未结束的图片数)。号池空闲时持续 > 0 表示并发槽位泄漏。 */
+  image_inflight?: number;
   last_used_at?: string | null;
   proxy?: string | null;
 };
@@ -99,14 +101,62 @@ type AccountUpdateResponse = {
   items: Account[];
 };
 
+export type ProxyRuntimeEgressMode = "direct" | "single_proxy";
+export type ProxyRuntimeClearanceMode = "none" | "manual" | "flaresolverr";
+
+export type ProxyRuntimeClearanceSettings = {
+  enabled: boolean;
+  mode: ProxyRuntimeClearanceMode;
+  cf_cookies: string;
+  cf_clearance: string;
+  user_agent: string;
+  browser: string;
+  flaresolverr_url: string;
+  timeout_sec: number | string;
+  refresh_interval: number | string;
+  warm_up_on_start: boolean;
+  has_cf_cookies?: boolean;
+  has_cf_clearance?: boolean;
+};
+
+export type ProxyRuntimeSettings = {
+  enabled: boolean;
+  egress_mode: ProxyRuntimeEgressMode;
+  proxy_url: string;
+  resource_proxy_url: string;
+  skip_ssl_verify: boolean;
+  reset_session_status_codes: number[];
+  clearance: ProxyRuntimeClearanceSettings;
+};
+
+export type ProxyRuntimeStatus = {
+  enabled: boolean;
+  egress_mode: ProxyRuntimeEgressMode | string;
+  proxy_source: string;
+  has_proxy: boolean;
+  clearance_enabled: boolean;
+  clearance_mode: ProxyRuntimeClearanceMode | string;
+  has_clearance_bundle: boolean;
+  cached_clearance_hosts: string[];
+};
+
+export type ProxyRuntimeResponse = {
+  runtime: ProxyRuntimeSettings;
+  status: ProxyRuntimeStatus;
+};
+
+export type ThirdPartyAppsSettings = {
+  infinite_canvas: {
+    enabled: boolean;
+    url: string;
+  };
+};
+
 export type SettingsConfig = {
   proxy: string;
   base_url?: string;
   global_system_prompt?: string;
   sensitive_words?: string[];
-  sub2api_billing_enabled?: boolean;
-  sub2api_billing_dsn?: string;
-  image_price_per_request?: number | string;
   ai_review?: {
     enabled?: boolean;
     base_url?: string;
@@ -115,15 +165,13 @@ export type SettingsConfig = {
     prompt?: string;
   };
   refresh_account_interval_minute?: number | string;
-  account_full_refresh_enabled?: boolean;
-  account_full_refresh_interval_minutes?: number | string;
-  account_full_refresh_concurrency?: number | string;
   image_retention_days?: number | string;
   image_poll_timeout_secs?: number | string;
   image_account_concurrency?: number | string;
   image_parallel_generation?: boolean;
   image_settle_enabled?: boolean;
   image_check_before_hit_enabled?: boolean;
+  image_remove_conversation_after_result?: boolean;
   image_settle_secs?: number | string;
   image_timeout_retry_secs?: number | string;
   auto_remove_invalid_accounts?: boolean;
@@ -131,6 +179,8 @@ export type SettingsConfig = {
   auto_relogin_after_refresh?: boolean;
   log_levels?: string[];
   image_storage?: ImageStorageSettings;
+  proxy_runtime?: ProxyRuntimeSettings;
+  third_party_apps?: ThirdPartyAppsSettings;
   backup?: BackupSettings;
   backup_state?: BackupState;
   [key: string]: unknown;
@@ -257,9 +307,6 @@ export type LoginResponse = {
   role: AuthRole;
   subject_id: string;
   name: string;
-  image_quota: number;
-  image_used: number;
-  image_remaining: number | null;
 };
 
 export type UserKey = {
@@ -269,75 +316,14 @@ export type UserKey = {
   enabled: boolean;
   created_at: string | null;
   last_used_at: string | null;
-  image_quota: number;
-  image_used: number;
 };
 
-export type ImageBillingLog = {
-  id: number;
-  created_at: string;
-  action: string;
-  status: string;
-  user_id: number;
-  api_key_id: number;
-  api_key: string;
-  user_email: string;
-  task_id: string;
-  amount: string;
-  balance_before: string;
-  balance_after: string;
-  mode: string;
-  model: string;
-  prompt_preview: string;
-  error: string;
-};
-
-export type ImageBillingLogListResponse = {
-  items: ImageBillingLog[];
-};
-
-export type RedeemCodeStatus = "available" | "redeemed" | "expired" | "disabled" | "missing";
-
-export type RedeemCode = {
-  id: string;
-  display_code: string;
-  image_quota: number;
-  enabled: boolean;
-  created_at: string;
-  expires_at?: string | null;
-  redeemed_at?: string | null;
-  redeemed_by_id?: string | null;
-  redeemed_by_name?: string | null;
-  redeemed_by_role?: string | null;
-  status: RedeemCodeStatus;
-};
-
-export type CreatedRedeemCode = RedeemCode & {
-  code: string;
-};
-
-export type RedeemCodeListResponse = {
-  items: RedeemCode[];
-};
-
-export type RedeemCodeCreateResponse = {
-  items: CreatedRedeemCode[];
-  all_items: RedeemCode[];
-};
-
-export type RedeemCodeVerifyResponse = {
-  ok: boolean;
-  exists: boolean;
-  status: RedeemCodeStatus;
-  item?: RedeemCode;
-  error?: string;
-};
-
-export type RedeemCodeRedeemResponse = {
-  ok: boolean;
-  item: RedeemCode;
-  image_quota_added: number;
-  profile: Omit<LoginResponse, "ok" | "version">;
+export type OutlookPoolStats = {
+  unused: number;
+  in_use: number;
+  used: number;
+  token_invalid: number;
+  failed: number;
 };
 
 export type RegisterConfig = {
@@ -346,6 +332,7 @@ export type RegisterConfig = {
     request_timeout: number;
     wait_timeout: number;
     wait_interval: number;
+    api_use_register_proxy: boolean;
     providers: Array<Record<string, unknown>>;
   };
   proxy: string;
@@ -388,10 +375,6 @@ export async function login(authKey: string) {
     },
     redirectOnUnauthorized: false,
   });
-}
-
-export async function fetchAuthProfile() {
-  return httpRequest<LoginResponse>("/auth/me");
 }
 
 export async function fetchAccounts() {
@@ -590,6 +573,10 @@ export async function updateSettingsConfig(settings: SettingsConfig) {
   });
 }
 
+export async function fetchThirdPartyApps() {
+  return httpRequest<{ third_party_apps: ThirdPartyAppsSettings }>("/api/third-party-apps");
+}
+
 export async function testBackupConnection() {
   return httpRequest<{ result: { ok: boolean; status: number } }>("/api/backup/test", {
     method: "POST",
@@ -725,17 +712,6 @@ export async function fetchSystemLogs(filters: { type?: string; start_date?: str
   return httpRequest<{ items: SystemLog[] }>(`/api/logs${params.toString() ? `?${params.toString()}` : ""}`);
 }
 
-export async function fetchImageBillingLogs(filters: { user_email?: string; action?: string; status?: string; start_date?: string; end_date?: string; limit?: number }) {
-  const params = new URLSearchParams();
-  if (filters.user_email) params.set("user_email", filters.user_email);
-  if (filters.action) params.set("action", filters.action);
-  if (filters.status) params.set("status", filters.status);
-  if (filters.start_date) params.set("start_date", filters.start_date);
-  if (filters.end_date) params.set("end_date", filters.end_date);
-  if (filters.limit) params.set("limit", String(filters.limit));
-  return httpRequest<ImageBillingLogListResponse>(`/api/image-billing-logs${params.toString() ? `?${params.toString()}` : ""}`);
-}
-
 export async function deleteSystemLogs(ids: string[]) {
   return httpRequest<{ removed: number }>("/api/logs/delete", {
     method: "POST",
@@ -747,14 +723,14 @@ export async function fetchUserKeys() {
   return httpRequest<{ items: UserKey[] }>("/api/auth/users");
 }
 
-export async function createUserKey(name: string, imageQuota = 0) {
+export async function createUserKey(name: string) {
   return httpRequest<{ item: UserKey; key: string; items: UserKey[] }>("/api/auth/users", {
     method: "POST",
-    body: { name, image_quota: imageQuota },
+    body: { name },
   });
 }
 
-export async function updateUserKey(keyId: string, updates: { enabled?: boolean; name?: string; key?: string; image_quota?: number; image_used?: number }) {
+export async function updateUserKey(keyId: string, updates: { enabled?: boolean; name?: string; key?: string }) {
   return httpRequest<{ item: UserKey; items: UserKey[] }>(`/api/auth/users/${keyId}`, {
     method: "POST",
     body: updates,
@@ -764,38 +740,6 @@ export async function updateUserKey(keyId: string, updates: { enabled?: boolean;
 export async function deleteUserKey(keyId: string) {
   return httpRequest<{ items: UserKey[] }>(`/api/auth/users/${keyId}`, {
     method: "DELETE",
-  });
-}
-
-export async function fetchRedeemCodes() {
-  return httpRequest<RedeemCodeListResponse>("/api/redeem-codes");
-}
-
-export async function createRedeemCodes(body: { count: number; image_quota: number; expires_at?: string | null; prefix?: string }) {
-  return httpRequest<RedeemCodeCreateResponse>("/api/redeem-codes", {
-    method: "POST",
-    body,
-  });
-}
-
-export async function verifyRedeemCode(code: string) {
-  return httpRequest<RedeemCodeVerifyResponse>("/api/redeem-codes/verify", {
-    method: "POST",
-    body: { code },
-  });
-}
-
-export async function redeemCode(code: string) {
-  return httpRequest<RedeemCodeRedeemResponse>("/api/redeem-codes/redeem", {
-    method: "POST",
-    body: { code },
-  });
-}
-
-export async function updateRedeemCode(codeId: string, updates: { enabled?: boolean }) {
-  return httpRequest<{ item: RedeemCode; items: RedeemCode[] }>(`/api/redeem-codes/${codeId}`, {
-    method: "POST",
-    body: updates,
   });
 }
 
@@ -820,6 +764,13 @@ export async function stopRegister() {
 
 export async function resetRegister() {
   return httpRequest<{ register: RegisterConfig }>("/api/register/reset", { method: "POST" });
+}
+
+export async function resetOutlookPool(scope: "all" | "failed" | "unused" = "all") {
+  return httpRequest<{ register: RegisterConfig }>("/api/register/outlook-pool/reset", {
+    method: "POST",
+    body: { scope },
+  });
 }
 
 // ── CPA (CLIProxyAPI) ──────────────────────────────────────────────
@@ -1000,6 +951,18 @@ export type ProxyTestResult = {
   status: number;
   latency_ms: number;
   error: string | null;
+  proxy_source?: string;
+  has_proxy?: boolean;
+};
+
+export type ClearanceTestResult = {
+  ok: boolean;
+  status: string;
+  latency_ms: number;
+  has_cookies: boolean;
+  user_agent: string;
+  error: string | null;
+  runtime: ProxyRuntimeStatus;
 };
 
 export async function fetchProxy() {
@@ -1017,5 +980,23 @@ export async function testProxy(url?: string) {
   return httpRequest<{ result: ProxyTestResult }>("/api/proxy/test", {
     method: "POST",
     body: { url: url ?? "" },
+  });
+}
+
+export async function fetchProxyRuntime() {
+  return httpRequest<ProxyRuntimeResponse>("/api/proxy/runtime");
+}
+
+export async function updateProxyRuntime(runtime: ProxyRuntimeSettings) {
+  return httpRequest<ProxyRuntimeResponse>("/api/proxy/runtime", {
+    method: "POST",
+    body: runtime,
+  });
+}
+
+export async function testProxyClearance(targetUrl?: string) {
+  return httpRequest<{ result: ClearanceTestResult }>("/api/proxy/clearance/test", {
+    method: "POST",
+    body: { target_url: targetUrl ?? "https://chatgpt.com" },
   });
 }

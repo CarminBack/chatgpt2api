@@ -3,10 +3,10 @@ from __future__ import annotations
 import base64
 import json
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
+from dataclasses import dataclass, field
 from typing import Any, Iterable, Iterator
 
 import tiktoken
@@ -298,6 +298,7 @@ class ConversationRequest:
     model: str = "auto"
     prompt: str = ""
     messages: list[dict[str, Any]] | None = None
+    thinking_effort: str = ""
     images: list[str] | None = None
     n: int = 1
     size: str | None = None
@@ -656,6 +657,7 @@ def conversation_events(
     images: list[str] | None = None,
     size: str | None = None,
     quality: str = "auto",
+    thinking_effort: str = "",
 ) -> Iterator[dict[str, Any]]:
     normalized = normalize_messages(messages or ([{"role": "user", "content": prompt}] if prompt else []))
     image_model = is_supported_image_model(model)
@@ -668,6 +670,7 @@ def conversation_events(
         prompt=final_prompt,
         images=images if image_model else None,
         system_hints=["picture_v2"] if image_model else None,
+        thinking_effort=thinking_effort if not image_model else "",
     )
     yield from iter_conversation_payloads(payloads, history_text, history_messages)
 
@@ -685,9 +688,16 @@ def stream_text_deltas(backend: OpenAIBackendAPI, request: ConversationRequest) 
             raise RuntimeError("no available text account")
         if token:
             attempted_tokens.add(token)
+        active_backend = None
         try:
             active_backend = OpenAIBackendAPI(access_token=token)
-            for event in conversation_events(active_backend, messages=request.messages, model=request.model, prompt=request.prompt):
+            for event in conversation_events(
+                active_backend,
+                messages=request.messages,
+                model=request.model,
+                prompt=request.prompt,
+                thinking_effort=request.thinking_effort,
+            ):
                 if event.get("type") != "conversation.delta":
                     continue
                 delta = str(event.get("delta") or "")
@@ -708,6 +718,9 @@ def stream_text_deltas(backend: OpenAIBackendAPI, request: ConversationRequest) 
                 if token:
                     continue
             raise
+        finally:
+            if active_backend is not None:
+                active_backend.close()
 
 
 def collect_text(backend: OpenAIBackendAPI, request: ConversationRequest) -> str:
@@ -761,6 +774,24 @@ def _get_detailed_error_from_tasks(
             "error": str(exc),
         })
         return ""
+
+
+def _remove_image_conversation_later(backend: OpenAIBackendAPI, conversation_id: str) -> None:
+    if not config.image_remove_conversation_after_result or not conversation_id:
+        return
+
+    def _run() -> None:
+        try:
+            backend.delete_conversation(conversation_id)
+            logger.info({"event": "image_conversation_removed", "conversation_id": conversation_id})
+        except Exception as exc:
+            logger.warning({
+                "event": "image_conversation_remove_failed",
+                "conversation_id": conversation_id,
+                "error": str(exc),
+            })
+
+    threading.Thread(target=_run, name=f"remove-image-conversation-{conversation_id}", daemon=True).start()
 
 
 def stream_image_outputs(
@@ -939,6 +970,7 @@ def stream_image_outputs(
             int(time.time()),
         )["data"]
         if data:
+            _remove_image_conversation_later(backend, conversation_id)
             yield ImageOutput(kind="result", model=request.model, index=index, total=total, data=data, conversation_id=conversation_id)
         return
 
@@ -1036,6 +1068,7 @@ def stream_image_outputs(
                         int(time.time()),
                     )["data"]
                     if data:
+                        _remove_image_conversation_later(backend, conversation_id)
                         yield ImageOutput(kind="result", model=request.model, index=index, total=total, data=data, conversation_id=conversation_id)
                         return
         elif is_text_reply:
@@ -1148,6 +1181,7 @@ def stream_image_outputs(
                     int(time.time()),
                 )["data"]
                 if data:
+                    _remove_image_conversation_later(backend, conversation_id)
                     yield ImageOutput(kind="result", model=request.model, index=index, total=total, data=data, conversation_id=conversation_id)
                     return
         
@@ -1264,6 +1298,7 @@ def _generate_single_image(
             "account_found": bool(account),
             "index": index,
         })
+        backend = None
         try:
             backend = OpenAIBackendAPI(access_token=token)
             if request.progress_callback:
@@ -1352,7 +1387,6 @@ def _generate_single_image(
             if account_email and not getattr(exc, "account_email", ""):
                 exc.account_email = account_email
             error_text = str(exc)
-            _mark_token_rate_limited_if_needed(token, exc, "image_generation_error")
             # 如果是模型返回文本而非图片，尝试换账号重试
             if is_model_text_reply_instead_of_image(error_text) and not emitted_for_token:
                 text_reply_retry_count += 1
@@ -1393,7 +1427,6 @@ def _generate_single_image(
         except Exception as exc:
             account_service.mark_image_result(token, False)
             last_error = str(exc)
-            _mark_token_rate_limited_if_needed(token, exc, "image_stream_error")
             logger.warning({
                 "event": "image_stream_fail",
                 "request_token": token,
@@ -1439,65 +1472,12 @@ def _generate_single_image(
                     time.sleep(wait_secs)
                     continue
             raise ImageGenerationError(image_stream_error_message(last_error), account_email=account_email, conversation_id="") from exc
+        finally:
+            if backend is not None:
+                backend.close()
 
 
-def _image_model_fallback_chain(model: str) -> list[str]:
-    normalized = str(model or "").strip() or "team-codex-gpt-image-2"
-    chains = {
-        "team-codex-gpt-image-2": ["team-codex-gpt-image-2", "codex-gpt-image-2", "gpt-image-2"],
-        "codex-gpt-image-2": ["codex-gpt-image-2", "gpt-image-2"],
-    }
-    chain = chains.get(normalized, [normalized])
-    return [item for item in chain if is_supported_image_model(item)]
-
-
-def _is_model_fallback_error(exc: Exception) -> bool:
-    text = str(exc or "").lower()
-    if not text:
-        return False
-    blocked_markers = (
-        "content_policy",
-        "content policy",
-        "moderation",
-        "rejected by upstream policy",
-        "invalid_request_error",
-    )
-    if any(marker in text for marker in blocked_markers):
-        return False
-    fallback_markers = (
-        "usage_limit_reached",
-        "limit has been reached",
-        "no available",
-        "quota",
-        "rate limit",
-        "rate_limit",
-    )
-    return any(marker in text for marker in fallback_markers)
-
-
-def _limit_restore_at_from_error(exc: Exception) -> str | None:
-    text = str(exc or "")
-    match = re.search(r'"resets_at"\s*:\s*(\d+)', text) or re.search(r"'resets_at'\s*:\s*(\d+)", text)
-    if match:
-        try:
-            return datetime.fromtimestamp(int(match.group(1)), tz=timezone.utc).isoformat()
-        except (TypeError, ValueError, OSError):
-            pass
-    match = re.search(r'"reset_after"\s*:\s*"([^"]+)"', text) or re.search(r"'reset_after'\s*:\s*'([^']+)'", text)
-    return match.group(1) if match else None
-
-
-def _mark_token_rate_limited_if_needed(access_token: str, exc: Exception, event: str) -> None:
-    if access_token and _is_model_fallback_error(exc):
-        account_service.mark_account_rate_limited(
-            access_token,
-            error=str(exc),
-            restore_at=_limit_restore_at_from_error(exc),
-            event=event,
-        )
-
-
-def _stream_image_outputs_with_pool_once(request: ConversationRequest) -> Iterator[ImageOutput]:
+def stream_image_outputs_with_pool(request: ConversationRequest) -> Iterator[ImageOutput]:
     """并行生成多张图片，每张图片使用独立线程和账号，互不阻塞。"""
     if not is_supported_image_model(request.model):
         raise ImageGenerationError("unsupported image model,supported models: " + ", ".join(sorted(IMAGE_MODELS)))
@@ -1581,37 +1561,6 @@ def _stream_image_outputs_with_pool_once(request: ConversationRequest) -> Iterat
         if not last_error:
             last_error = "no account in the pool could generate images — check account quota and rate-limit status"
         raise ImageGenerationError(image_stream_error_message(last_error), conversation_id="")
-
-
-def stream_image_outputs_with_pool(request: ConversationRequest) -> Iterator[ImageOutput]:
-    fallback_chain = _image_model_fallback_chain(request.model)
-    if not fallback_chain:
-        raise ImageGenerationError("unsupported image model,supported models: " + ", ".join(sorted(IMAGE_MODELS)))
-    last_error: Exception | None = None
-    for index, model in enumerate(fallback_chain):
-        attempt_request = request if model == request.model else replace(request, model=model)
-        if index > 0:
-            logger.info({
-                "event": "image_model_fallback_attempt",
-                "from_model": request.model,
-                "attempt_model": model,
-                "previous_error": str(last_error or "")[:300],
-            })
-        try:
-            yield from _stream_image_outputs_with_pool_once(attempt_request)
-            return
-        except Exception as exc:
-            last_error = exc
-            if index >= len(fallback_chain) - 1 or not _is_model_fallback_error(exc):
-                raise
-            logger.warning({
-                "event": "image_model_fallback",
-                "from_model": model,
-                "to_model": fallback_chain[index + 1],
-                "error": str(exc)[:300],
-            })
-    if last_error:
-        raise last_error
 
 
 def stream_image_chunks(outputs: Iterable[ImageOutput]) -> Iterator[dict[str, Any]]:
