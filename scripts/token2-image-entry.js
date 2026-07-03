@@ -139,9 +139,35 @@
     return `${IMAGE3_LOGIN_URL}#apiKey=${encodeURIComponent(apiKey)}`;
   }
 
+  function openPendingTab() {
+    const targetWindow = window.open("about:blank", "_blank");
+    if (!targetWindow) return null;
+    try {
+      targetWindow.opener = null;
+      targetWindow.document.title = "正在进入图片生成";
+      targetWindow.document.body.style.cssText =
+        "margin:0;min-height:100vh;display:grid;place-items:center;font:14px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#444;background:#f7f3ee";
+      targetWindow.document.body.textContent = "正在进入图片生成...";
+    } catch {
+      // Some browsers restrict writes to the new tab; location assignment below
+      // still works for the window handle.
+    }
+    return targetWindow;
+  }
+
+  function navigateToImage3(targetWindow, apiKey) {
+    const url = image3LoginUrl(apiKey);
+    if (targetWindow && !targetWindow.closed) {
+      targetWindow.location.href = url;
+      return;
+    }
+    window.location.href = url;
+  }
+
   async function openImage3(link) {
     if (link.dataset.loading === "1") return;
     const originalText = link.textContent || LABEL;
+    const targetWindow = openPendingTab();
     link.dataset.loading = "1";
     link.setAttribute("aria-busy", "true");
     replaceLabel(link, "正在进入");
@@ -150,8 +176,11 @@
       if (!key?.key) {
         throw new Error("没有可用的 image2 密钥");
       }
-      window.location.href = image3LoginUrl(key.key);
+      navigateToImage3(targetWindow, key.key);
     } catch (error) {
+      if (targetWindow && !targetWindow.closed) {
+        targetWindow.close();
+      }
       link.dataset.loading = "0";
       link.removeAttribute("aria-busy");
       replaceLabel(link, originalText.trim() || LABEL);

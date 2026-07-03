@@ -89,8 +89,8 @@ Token2 image entry:
   `/opt/1panel/apps/openresty/openresty/www/sites/token2.mewinyou.shop/index/token2-image-entry.js`
 - The script adds the sidebar `图片生成` entry. On click, it uses the current
   token2 browser session (`localStorage.auth_token`) to call `/api/v1/keys`,
-  chooses the first active key from `group_id=12`, and redirects to image3 with
-  that key in the URL hash.
+  chooses the first active key from `group_id=12`, opens a new browser tab, and
+  redirects that tab to image3 with the key in the URL hash.
 - If the current token2 user has no active `group_id=12` key, the script creates
   one with name `image3自动生成` and no quota. A missing quota means the key has
   no separate key cap; image3 still debits the token2 user wallet. Admins can add
