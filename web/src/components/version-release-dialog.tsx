@@ -3,7 +3,6 @@
 import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -29,9 +28,7 @@ export function VersionReleaseDialog({ className }: { className?: string }) {
     openReleaseModal,
     latestVersion,
     releases,
-    checking,
     hasNewVersion,
-    checkLatestRelease,
   } = useVersionCheck();
 
   return (
@@ -58,17 +55,8 @@ export function VersionReleaseDialog({ className }: { className?: string }) {
           <div className="grid grid-cols-2 gap-3">
             <VersionCard label="当前版本" value={webConfig.appVersion} />
             <VersionCard
-              label="最新版本"
+              label="本地版本"
               value={latestVersion}
-              action={
-                <button
-                  type="button"
-                  className="text-[11px] text-stone-400 underline-offset-2 hover:text-stone-700 hover:underline dark:hover:text-stone-200"
-                  onClick={() => void checkLatestRelease(true)}
-                >
-                  {checking ? "检查中..." : "检查更新"}
-                </button>
-              }
             />
           </div>
           <div className="max-h-[56vh] space-y-5 overflow-y-auto pr-1">
@@ -95,11 +83,6 @@ export function VersionReleaseDialog({ className }: { className?: string }) {
               </div>
             ))}
           </div>
-          <Button variant="outline" size="sm" asChild>
-            <a href="https://github.com/basketikun/chatgpt2api" target="_blank" rel="noreferrer">
-              前往 GitHub 更新
-            </a>
-          </Button>
         </DialogContent>
       </Dialog>
     </>
