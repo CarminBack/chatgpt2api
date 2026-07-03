@@ -148,6 +148,8 @@ class ImageTaskService:
             "quality": quality,
             "response_format": "url",
             "base_url": base_url,
+            "image_owner_id": _owner_id(identity),
+            "image_owner_name": _clean(identity.get("name")),
         }
         return self._submit(identity, client_task_id=client_task_id, mode="generate", payload=payload)
 
@@ -174,6 +176,8 @@ class ImageTaskService:
             "quality": quality,
             "response_format": "url",
             "base_url": base_url,
+            "image_owner_id": _owner_id(identity),
+            "image_owner_name": _clean(identity.get("name")),
         }
         return self._submit(identity, client_task_id=client_task_id, mode="edit", payload=payload)
 

@@ -148,7 +148,12 @@ def cleanup_image_thumbnails() -> int:
     _cleanup_empty_dirs(thumbnails_root)
     return removed
 
-def list_images(base_url: str, start_date: str = "", end_date: str = "") -> dict[str, object]:
+def list_images(
+    base_url: str,
+    start_date: str = "",
+    end_date: str = "",
+    owner_id: str | None = None,
+) -> dict[str, object]:
     config.cleanup_old_images()
     cleanup_image_thumbnails()
     all_tags = load_tags()
@@ -159,7 +164,7 @@ def list_images(base_url: str, start_date: str = "", end_date: str = "") -> dict
             "thumbnail_url": thumbnail_url(base_url, str(item["path"])),
             "tags": all_tags.get(str(item["path"]), []),
         }
-        for item in image_storage_service.list_items(base_url, start_date, end_date)
+        for item in image_storage_service.list_items(base_url, start_date, end_date, owner_id=owner_id)
     ]
     groups: dict[str, list[dict[str, object]]] = {}
     for item in items:
@@ -167,14 +172,22 @@ def list_images(base_url: str, start_date: str = "", end_date: str = "") -> dict
     return {"items": items, "groups": [{"date": key, "items": value} for key, value in groups.items()]}
 
 
-def delete_images(paths: list[str] | None = None, start_date: str = "", end_date: str = "", all_matching: bool = False) -> dict[str, int]:
+def delete_images(
+    paths: list[str] | None = None,
+    start_date: str = "",
+    end_date: str = "",
+    all_matching: bool = False,
+    owner_id: str | None = None,
+) -> dict[str, int]:
     root = config.images_dir.resolve()
     targets = [
         str(item["path"])
-        for item in image_storage_service.list_items("", start_date=start_date, end_date=end_date)
+        for item in image_storage_service.list_items("", start_date=start_date, end_date=end_date, owner_id=owner_id)
     ] if all_matching else (paths or [])
     removed = 0
     for item in targets:
+        if not image_storage_service.can_access(item, owner_id):
+            continue
         path = (root / item).resolve()
         try:
             path.relative_to(root)
@@ -191,7 +204,7 @@ def delete_images(paths: list[str] | None = None, start_date: str = "", end_date
     return {"removed": removed}
 
 
-def download_images_zip(paths: list[str]) -> io.BytesIO:
+def download_images_zip(paths: list[str], owner_id: str | None = None) -> io.BytesIO:
     root = config.images_dir.resolve()
     buf = io.BytesIO()
     added = 0
@@ -199,6 +212,8 @@ def download_images_zip(paths: list[str]) -> io.BytesIO:
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for item in paths:
             rel = _safe_relative_path(item)
+            if not image_storage_service.can_access(rel, owner_id):
+                continue
             path = (root / rel).resolve()
             payload: bytes | None = None
             try:
@@ -227,19 +242,24 @@ def download_images_zip(paths: list[str]) -> io.BytesIO:
         raise HTTPException(status_code=404, detail="no images found")
     buf.seek(0)
     return buf
-def storage_stats() -> dict:
+def storage_stats(owner_id: str | None = None) -> dict:
     import shutil
     usage = shutil.disk_usage(config.images_dir)
     total_mb = usage.total // (1024 * 1024)
     used_mb = usage.used // (1024 * 1024)
     free_mb = usage.free // (1024 * 1024)
 
-    image_count = 0
-    image_size = 0
-    for p in config.images_dir.rglob("*"):
-        if p.is_file():
-            image_count += 1
-            image_size += p.stat().st_size
+    if owner_id is None:
+        image_count = 0
+        image_size = 0
+        for p in config.images_dir.rglob("*"):
+            if p.is_file():
+                image_count += 1
+                image_size += p.stat().st_size
+    else:
+        visible_items = image_storage_service.list_items("", owner_id=owner_id)
+        image_count = len(visible_items)
+        image_size = sum(int(item.get("size") or 0) for item in visible_items)
 
     return {
         "disk_total_mb": total_mb,
@@ -315,39 +335,6 @@ def delete_to_target(target_free_mb: int, dry_run: bool = False) -> dict:
         "done": (current_free + freed // (1024 * 1024)) >= target_free_mb,
         "dry_run": dry_run,
     }
-
-
-def download_images_zip(paths: list[str]) -> io.BytesIO:
-    root = config.images_dir.resolve()
-    buf = io.BytesIO()
-    added = 0
-    used_names: set[str] = set()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for item in paths:
-            rel = _safe_relative_path(item)
-            path = (root / rel).resolve()
-            try:
-                path.relative_to(root)
-            except ValueError:
-                continue
-            if not path.is_file():
-                continue
-            name = path.name
-            if name in used_names:
-                stem = path.stem
-                suffix = path.suffix
-                counter = 2
-                while f"{stem}_{counter}{suffix}" in used_names:
-                    counter += 1
-                name = f"{stem}_{counter}{suffix}"
-            used_names.add(name)
-            zf.write(path, name)
-            added += 1
-    if added == 0:
-        raise HTTPException(status_code=404, detail="no images found")
-    buf.seek(0)
-    return buf
-
 
 def _auto_cleanup_worker(stop_event: threading.Event) -> None:
     """后台线程：每30分钟检查存储，空间低于阈值自动清理最旧图片"""

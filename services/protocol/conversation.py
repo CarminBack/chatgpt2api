@@ -148,8 +148,19 @@ def encode_images(images: Iterable[tuple[bytes, str, str]]) -> list[str]:
     return [base64.b64encode(data).decode("ascii") for data, _, _ in images if data]
 
 
-def save_image_bytes(image_data: bytes, base_url: str | None = None) -> str:
-    return image_storage_service.save(image_data, base_url).url
+def save_image_bytes(
+    image_data: bytes,
+    base_url: str | None = None,
+    *,
+    owner_id: str = "",
+    owner_name: str = "",
+) -> str:
+    return image_storage_service.save(
+        image_data,
+        base_url,
+        owner_id=owner_id,
+        owner_name=owner_name,
+    ).url
 
 
 def message_text(content: Any) -> str:
@@ -269,6 +280,8 @@ def format_image_result(
     base_url: str | None = None,
     created: int | None = None,
     message: str = "",
+    owner_id: str = "",
+    owner_name: str = "",
 ) -> dict[str, Any]:
     data: list[dict[str, Any]] = []
     for item in items:
@@ -279,12 +292,22 @@ def format_image_result(
         if response_format == "b64_json":
             data.append({
                 "b64_json": b64_json,
-                "url": save_image_bytes(base64.b64decode(b64_json), base_url),
+                "url": save_image_bytes(
+                    base64.b64decode(b64_json),
+                    base_url,
+                    owner_id=owner_id,
+                    owner_name=owner_name,
+                ),
                 "revised_prompt": revised_prompt,
             })
         else:
             data.append({
-                "url": save_image_bytes(base64.b64decode(b64_json), base_url),
+                "url": save_image_bytes(
+                    base64.b64decode(b64_json),
+                    base_url,
+                    owner_id=owner_id,
+                    owner_name=owner_name,
+                ),
                 "revised_prompt": revised_prompt,
             })
     result: dict[str, Any] = {"created": created or int(time.time()), "data": data}
@@ -305,6 +328,8 @@ class ConversationRequest:
     quality: str = "auto"
     response_format: str = "b64_json"
     base_url: str | None = None
+    owner_id: str = ""
+    owner_name: str = ""
     message_as_error: bool = False
     progress_callback: Any = None  # Callable[[str], None] | None
 
@@ -968,6 +993,8 @@ def stream_image_outputs(
             request.response_format,
             request.base_url,
             int(time.time()),
+            owner_id=request.owner_id,
+            owner_name=request.owner_name,
         )["data"]
         if data:
             _remove_image_conversation_later(backend, conversation_id)
@@ -1066,6 +1093,8 @@ def stream_image_outputs(
                         request.response_format,
                         request.base_url,
                         int(time.time()),
+                        owner_id=request.owner_id,
+                        owner_name=request.owner_name,
                     )["data"]
                     if data:
                         _remove_image_conversation_later(backend, conversation_id)
@@ -1179,6 +1208,8 @@ def stream_image_outputs(
                     request.response_format,
                     request.base_url,
                     int(time.time()),
+                    owner_id=request.owner_id,
+                    owner_name=request.owner_name,
                 )["data"]
                 if data:
                     _remove_image_conversation_later(backend, conversation_id)
@@ -1240,6 +1271,8 @@ def stream_codex_image_outputs(
         request.response_format,
         request.base_url,
         int(time.time()),
+        owner_id=request.owner_id,
+        owner_name=request.owner_name,
     )["data"]
     if data:
         yield ImageOutput(kind="result", model=request.model, index=index, total=total, data=data)

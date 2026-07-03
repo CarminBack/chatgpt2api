@@ -58,6 +58,15 @@ class BackupDeleteRequest(BaseModel):
     key: str = ""
 
 
+def _image_owner_filter(identity: dict[str, object]) -> str | None:
+    if identity.get("role") == "admin":
+        return None
+    owner_id = str(identity.get("id") or "").strip()
+    if not owner_id:
+        raise HTTPException(status_code=401, detail={"error": "密钥无效或已失效，请重新登录"})
+    return owner_id
+
+
 def create_router(app_version: str) -> APIRouter:
     router = APIRouter()
 
@@ -96,8 +105,13 @@ def create_router(app_version: str) -> APIRouter:
 
     @router.get("/api/images")
     async def get_images(request: Request, start_date: str = "", end_date: str = "", authorization: str | None = Header(default=None)):
-        require_admin(authorization)
-        return list_images(resolve_image_base_url(request), start_date=start_date.strip(), end_date=end_date.strip())
+        identity = require_identity(authorization)
+        return list_images(
+            resolve_image_base_url(request),
+            start_date=start_date.strip(),
+            end_date=end_date.strip(),
+            owner_id=_image_owner_filter(identity),
+        )
 
     @router.get("/images/{image_path:path}", include_in_schema=False)
     async def get_image(image_path: str):
@@ -109,13 +123,19 @@ def create_router(app_version: str) -> APIRouter:
 
     @router.post("/api/images/delete")
     async def delete_images_endpoint(body: ImageDeleteRequest, authorization: str | None = Header(default=None)):
-        require_admin(authorization)
-        return delete_images(body.paths, start_date=body.start_date.strip(), end_date=body.end_date.strip(), all_matching=body.all_matching)
+        identity = require_identity(authorization)
+        return delete_images(
+            body.paths,
+            start_date=body.start_date.strip(),
+            end_date=body.end_date.strip(),
+            all_matching=body.all_matching,
+            owner_id=_image_owner_filter(identity),
+        )
 
     @router.post("/api/images/download")
     async def download_images_endpoint(body: ImageDownloadRequest, authorization: str | None = Header(default=None)):
-        require_admin(authorization)
-        buf = download_images_zip(body.paths)
+        identity = require_identity(authorization)
+        buf = download_images_zip(body.paths, owner_id=_image_owner_filter(identity))
         return StreamingResponse(
             buf,
             media_type="application/zip",
@@ -124,7 +144,9 @@ def create_router(app_version: str) -> APIRouter:
 
     @router.get("/api/images/download/{image_path:path}")
     async def download_single_image_endpoint(image_path: str, authorization: str | None = Header(default=None)):
-        require_admin(authorization)
+        identity = require_identity(authorization)
+        if not image_storage_service.can_access(image_path, _image_owner_filter(identity)):
+            raise HTTPException(status_code=404, detail={"error": "image not found"})
         return get_image_download_response(image_path)
 
     @router.get("/api/logs")
@@ -256,28 +278,38 @@ def create_router(app_version: str) -> APIRouter:
 
     @router.get("/api/images/tags")
     async def list_image_tags(authorization: str | None = Header(default=None)):
-        require_admin(authorization)
-        return {"tags": get_all_tags()}
+        identity = require_identity(authorization)
+        owner_id = _image_owner_filter(identity)
+        allowed_rels = None
+        if owner_id is not None:
+            allowed_rels = {str(item["path"]) for item in image_storage_service.list_items("", owner_id=owner_id)}
+        return {"tags": get_all_tags(allowed_rels)}
 
     @router.post("/api/images/tags")
     async def update_image_tags(body: ImageTagsRequest, authorization: str | None = Header(default=None)):
-        require_admin(authorization)
+        identity = require_identity(authorization)
         rel = body.path.strip().lstrip("/")
         if not rel:
             raise HTTPException(status_code=400, detail={"error": "path is required"})
+        if not image_storage_service.can_access(rel, _image_owner_filter(identity)):
+            raise HTTPException(status_code=404, detail={"error": "image not found"})
         tags = set_tags(rel, body.tags)
         return {"ok": True, "tags": tags}
 
     @router.delete("/api/images/tags/{tag}")
     async def delete_image_tag(tag: str, authorization: str | None = Header(default=None)):
-        require_admin(authorization)
-        count = delete_tag(tag)
+        identity = require_identity(authorization)
+        owner_id = _image_owner_filter(identity)
+        allowed_rels = None
+        if owner_id is not None:
+            allowed_rels = {str(item["path"]) for item in image_storage_service.list_items("", owner_id=owner_id)}
+        count = delete_tag(tag, allowed_rels)
         return {"ok": True, "removed_from": count}
 
     @router.get("/api/images/storage")
     async def get_image_storage(authorization: str | None = Header(default=None)):
-        require_admin(authorization)
-        return storage_stats()
+        identity = require_identity(authorization)
+        return storage_stats(owner_id=_image_owner_filter(identity))
 
     @router.post("/api/images/storage/compress")
     async def compress_all_images(authorization: str | None = Header(default=None)):

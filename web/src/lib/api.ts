@@ -263,6 +263,8 @@ export type ManagedImage = {
   width?: number;
   height?: number;
   tags?: string[];
+  owner_id?: string;
+  owner_name?: string;
 };
 
 export type SystemLog = {

@@ -57,7 +57,7 @@ function useLongPress(onLongPress: () => void, ms = LONG_PRESS_MS) {
   };
 }
 
-function ImageManagerContent() {
+function ImageManagerContent({ isAdmin }: { isAdmin: boolean }) {
   const [items, setItems] = useState<ManagedImage[]>([]);
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
@@ -75,15 +75,18 @@ function ImageManagerContent() {
   const [targetFreeMb, setTargetFreeMb] = useState(500);
 
   const loadStorage = useCallback(async () => {
+    if (!isAdmin) {
+      return;
+    }
     try {
       setStorageLoading(true);
       const data = await fetchImageStorage();
       setStorage(data);
     } catch { /* ignore */ }
     finally { setStorageLoading(false); }
-  }, []);
+  }, [isAdmin]);
 
-  useEffect(() => { void loadStorage(); }, [loadStorage]);
+  useEffect(() => { if (isAdmin) void loadStorage(); }, [isAdmin, loadStorage]);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [tagEditTarget, setTagEditTarget] = useState<ManagedImage | null>(null);
   const [tagInput, setTagInput] = useState("");
@@ -194,6 +197,7 @@ function ImageManagerContent() {
   const [tagDeleteTarget, setTagDeleteTarget] = useState<string | null>(null);
 
   const handleDeleteTag = async (tag: string) => {
+    if (!isAdmin) return;
     try {
       const result = await deleteImageTag(tag);
       setAllTags((prev) => prev.filter((t) => t !== tag));
@@ -278,6 +282,7 @@ function ImageManagerContent() {
         <div className="space-y-1">
           <div className="text-xs font-semibold tracking-[0.18em] text-stone-500 uppercase">Images</div>
           <h1 className="text-2xl font-semibold tracking-tight">图片管理</h1>
+          <p className="text-sm text-stone-500">默认图片储存 7 天，请尽快保存到本地。</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <DateRangeFilter startDate={startDate} endDate={endDate} onChange={(start, end) => { setStartDate(start); setEndDate(end); }} />
@@ -288,10 +293,10 @@ function ImageManagerContent() {
             {isLoading ? <LoaderCircle className="size-4 animate-spin" /> : <Search className="size-4" />}
             查询
           </Button>
-          <Button variant="outline" onClick={() => setDeleteMode("filtered")} disabled={isDeleting || items.length === 0 || (!startDate && !endDate)} className="h-10 rounded-xl border-rose-200 bg-white px-4 text-rose-600 hover:bg-rose-50">
+          {isAdmin ? <Button variant="outline" onClick={() => setDeleteMode("filtered")} disabled={isDeleting || items.length === 0 || (!startDate && !endDate)} className="h-10 rounded-xl border-rose-200 bg-white px-4 text-rose-600 hover:bg-rose-50">
             <Trash2 className="size-4" />
             删除匹配日期
-          </Button>
+          </Button> : null}
         </div>
       </div>
 
@@ -307,10 +312,10 @@ function ImageManagerContent() {
               <span
                 key={tag}
                 className="relative inline-flex items-center"
-                onMouseDown={() => startTagPress(tag)}
+                onMouseDown={() => { if (isAdmin) startTagPress(tag); }}
                 onMouseUp={stopTagPress}
                 onMouseLeave={stopTagPress}
-                onTouchStart={() => startTagPress(tag)}
+                onTouchStart={() => { if (isAdmin) startTagPress(tag); }}
                 onTouchEnd={stopTagPress}
               >
                 <button
@@ -343,8 +348,7 @@ function ImageManagerContent() {
         </div>
       ) : null}
 
-      {/* Storage Stats Panel */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3 mb-4">
+      {isAdmin ? <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3 mb-4">
         {storage ? (
           <>
             <div className="rounded-xl border border-stone-200 bg-white/80 p-3">
@@ -401,10 +405,10 @@ function ImageManagerContent() {
             {storageLoading ? "加载存储信息..." : "存储信息加载失败"}
           </div>
         )}
-      </div>
+      </div> : null}
 
       {/* Delete by date dialog */}
-      <Dialog open={deleteMode === "byDate"} onOpenChange={() => setDeleteMode(null)}>
+      {isAdmin ? <Dialog open={deleteMode === "byDate"} onOpenChange={() => setDeleteMode(null)}>
         <DialogContent className="sm:max-w-md rounded-2xl">
           <DialogHeader><DialogTitle>按日期删除图片</DialogTitle></DialogHeader>
           <div className="space-y-4">
@@ -435,7 +439,7 @@ function ImageManagerContent() {
             </Button>
           </DialogFooter>
         </DialogContent>
-      </Dialog>
+      </Dialog> : null}
 
       <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
         <CardContent className="p-0">
@@ -694,7 +698,7 @@ function ImageManagerContent() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      <Dialog open={Boolean(tagDeleteTarget)} onOpenChange={(open) => { if (!open) setTagDeleteTarget(null); }}>
+      {isAdmin ? <Dialog open={Boolean(tagDeleteTarget)} onOpenChange={(open) => { if (!open) setTagDeleteTarget(null); }}>
         <DialogContent className="max-w-sm rounded-2xl">
           <DialogHeader>
             <DialogTitle>删除标签</DialogTitle>
@@ -718,15 +722,15 @@ function ImageManagerContent() {
             </Button>
           </DialogFooter>
         </DialogContent>
-      </Dialog>
+      </Dialog> : null}
     </section>
   );
 }
 
 export default function ImageManagerPage() {
-  const { isCheckingAuth, session } = useAuthGuard(["admin"]);
-  if (isCheckingAuth || !session || session.role !== "admin") {
+  const { isCheckingAuth, session } = useAuthGuard(["admin", "user"]);
+  if (isCheckingAuth || !session) {
     return <div className="flex min-h-[40vh] items-center justify-center"><LoaderCircle className="size-5 animate-spin text-stone-400" /></div>;
   }
-  return <ImageManagerContent />;
+  return <ImageManagerContent isAdmin={session.role === "admin"} />;
 }

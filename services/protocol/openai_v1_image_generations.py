@@ -20,6 +20,8 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
     quality = str(body.get("quality") or "auto")
     response_format = str(body.get("response_format") or "b64_json")
     base_url = str(body.get("base_url") or "") or None
+    owner_id = str(body.get("image_owner_id") or "").strip()
+    owner_name = str(body.get("image_owner_name") or "").strip()
     progress_callback = body.get("progress_callback")
     outputs = stream_image_outputs_with_pool(ConversationRequest(
         prompt=prompt,
@@ -29,6 +31,8 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
         quality=quality,
         response_format=response_format,
         base_url=base_url,
+        owner_id=owner_id,
+        owner_name=owner_name,
         message_as_error=True,
         progress_callback=progress_callback,
     ))

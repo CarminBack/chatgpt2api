@@ -59,6 +59,8 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
     quality = str(body.get("quality") or "auto")
     response_format = str(body.get("response_format") or "b64_json")
     base_url = str(body.get("base_url") or "") or None
+    owner_id = str(body.get("image_owner_id") or "").strip()
+    owner_name = str(body.get("image_owner_name") or "").strip()
     progress_callback = body.get("progress_callback")
     encoded_images = encode_images(images)
     if not encoded_images:
@@ -71,6 +73,8 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
         quality=quality,
         response_format=response_format,
         base_url=base_url,
+        owner_id=owner_id,
+        owner_name=owner_name,
         images=encoded_images,
         message_as_error=True,
         progress_callback=progress_callback,

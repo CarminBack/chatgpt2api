@@ -92,6 +92,11 @@ def _should_bill_sub2api(identity: dict[str, object]) -> bool:
     return bool("sub2api" in str(identity.get("source") or "") and _token_value(identity))
 
 
+def _attach_image_owner(payload: dict[str, object], identity: dict[str, object]) -> None:
+    payload["image_owner_id"] = _clean(identity.get("id"))
+    payload["image_owner_name"] = _clean(identity.get("name"))
+
+
 def create_router() -> APIRouter:
     router = APIRouter()
 
@@ -167,6 +172,7 @@ def create_router() -> APIRouter:
     ):
         identity = require_identity(authorization)
         payload = body.model_dump(mode="python")
+        _attach_image_owner(payload, identity)
         payload["base_url"] = resolve_image_base_url(request)
         call = LoggedCall(identity, "/v1/images/generations", body.model, "文生图", request_text=body.prompt)
         await filter_or_log(call, body.prompt)
@@ -179,6 +185,7 @@ def create_router() -> APIRouter:
     ):
         identity = require_identity(authorization)
         payload, image_sources, mask_sources = await parse_image_edit_request(request)
+        _attach_image_owner(payload, identity)
         prompt = str(payload["prompt"])
         model = str(payload["model"])
         image_count = int(payload.get("n") or 1)

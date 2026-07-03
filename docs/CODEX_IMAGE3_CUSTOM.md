@@ -117,6 +117,16 @@ Balance and usage updates:
 - Refunds reverse balance and usage counters, clamped at zero.
 - Writes all debit/refund events to `custom_image_billing_logs`.
 
+Image management:
+
+- Token2/image3 user keys can open the image management page.
+- Admin users can see and manage all stored images.
+- Normal users only see images whose `image_index.json` record has `owner_id` equal to their authenticated subject id, for example `sub2api:<api_key_id>`.
+- New images save `owner_id` and `owner_name` into the image storage index.
+- Existing images without owner metadata are not shown to normal users unless they are backfilled.
+- Users can download, delete, and tag only their own images. Admin-only global storage tools remain admin-only.
+- The image management page shows: `默认图片储存 7 天，请尽快保存到本地。`
+
 ## Token2 Database Dependencies
 
 The custom billing code directly reads/writes token2 PostgreSQL tables. If token2/sub2api updates its schema, verify these fields still exist.
@@ -170,10 +180,24 @@ Primary custom files:
   - direct image generation/edit billing wrapper
 - `services/image_task_service.py`
   - async image task billing/refund
+  - attaches image owner metadata for task-generated images
 - `api/image_tasks.py`
   - converts billing errors to HTTP responses
 - `services/config.py`
   - runtime config getters for token2 billing and group whitelist
+- `services/image_storage_service.py`
+  - stores `owner_id` / `owner_name` for new images
+  - filters image index items by owner for normal users
+- `services/image_service.py`
+  - applies owner filtering for list/delete/download/storage stats
+- `api/system.py`
+  - image management APIs use `require_identity`; admin gets all images, user gets own images
+- `web/src/app/image-manager/page.tsx`
+  - allows both admin and user roles
+  - hides admin-only storage cleanup/compression controls from normal users
+  - displays the 7-day local-save notice
+- `web/src/components/top-nav.tsx`
+  - exposes image management navigation for normal users
 
 Keep future custom logic concentrated in `services/sub2api_billing_service.py` where possible.
 
@@ -300,6 +324,27 @@ LEFT JOIN groups g ON g.id = k.group_id
 WHERE k.id = <key_id>;"
 ```
 
+Check image management owner filtering:
+
+```bash
+TOKEN='<token2 image2 group key>'
+curl -sS -H "Authorization: Bearer $TOKEN" \
+  'https://image3.mewinyou.shop/api/images' | jq '.items | length'
+```
+
+Expected:
+
+- Token2 users receive `200`.
+- The returned list only contains their own owner-tagged images.
+- A non-owner image path sent to `/api/images/delete`, `/api/images/download`, or `/api/images/tags` should return no access or `404`.
+
+Backfill existing images when needed:
+
+- Existing `image_index.json` records created before owner tracking do not have `owner_id`.
+- To make old images visible to users, backfill only images that can be confidently matched to token2 billing logs.
+- Use image created time near `custom_image_billing_logs.created_at`, and map to owner id `sub2api:<api_key_id>`.
+- Do not bulk assign unowned historical images to users without a clear match.
+
 ## Updating From Upstream
 
 Goal: keep upstream changes while preserving image3 custom behavior.
@@ -342,6 +387,8 @@ Update this document in the same commit whenever any of these change:
 - DB tables or fields used by billing
 - refund behavior
 - key usage sync behavior
+- image owner/index behavior
+- image management permissions
 - deployment paths, image tags, container names, or compose process
 - validation commands
 - runtime config keys

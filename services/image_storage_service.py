@@ -202,7 +202,14 @@ class ImageStorageService:
         relative_dir = Path(time.strftime("%Y"), time.strftime("%m"), time.strftime("%d"))
         return f"{relative_dir.as_posix()}/{filename}"
 
-    def save(self, image_data: bytes, base_url: str | None = None) -> StoredImage:
+    def save(
+        self,
+        image_data: bytes,
+        base_url: str | None = None,
+        *,
+        owner_id: str = "",
+        owner_name: str = "",
+    ) -> StoredImage:
         config.cleanup_old_images()
         rel = self.make_relative_path(image_data)
         mode = self.mode()
@@ -235,6 +242,10 @@ class ImageStorageService:
             "webdav": stored_webdav,
             "remote_url": remote_url,
         }
+        if owner_id:
+            item["owner_id"] = owner_id
+        if owner_name:
+            item["owner_name"] = owner_name
         if dimensions:
             item["width"], item["height"] = dimensions
         with self._index_lock:
@@ -268,7 +279,20 @@ class ImageStorageService:
         safe_rel = _safe_relative_path(rel)
         return _is_image_rel(safe_rel) and _local_image_path(safe_rel).is_file()
 
-    def list_items(self, base_url: str, start_date: str = "", end_date: str = "") -> list[dict[str, object]]:
+    def can_access(self, rel: str, owner_id: str | None = None) -> bool:
+        if owner_id is None:
+            return self.exists(rel)
+        safe_rel = _safe_relative_path(rel)
+        item = self._load_clean_index().get(safe_rel)
+        return bool(item and str(item.get("owner_id") or "") == owner_id and self.exists(safe_rel))
+
+    def list_items(
+        self,
+        base_url: str,
+        start_date: str = "",
+        end_date: str = "",
+        owner_id: str | None = None,
+    ) -> list[dict[str, object]]:
         with self._index_lock:
             indexed = self._load_clean_index()
             root = config.images_dir
@@ -323,6 +347,8 @@ class ImageStorageService:
                 if start_date and day < start_date:
                     continue
                 if end_date and day > end_date:
+                    continue
+                if owner_id is not None and str(item.get("owner_id") or "") != owner_id:
                     continue
                 items.append({
                     **item,
