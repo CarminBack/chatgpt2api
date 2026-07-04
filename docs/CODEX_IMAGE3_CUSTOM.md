@@ -91,6 +91,12 @@ Authentication:
   consumed in the browser, removed from the address bar, then submitted through
   the normal `/auth/login` flow.
 
+Third-party apps:
+
+- When the infinite canvas entry is enabled, the top navigation opens the
+  configured canvas URL directly in a new tab and appends `apiKey` and `baseUrl`
+  query parameters. It does not show a confirmation dialog before redirecting.
+
 Token2 image entry:
 
 - token2 injects `/token2-image-entry.js` from the 1Panel openresty site

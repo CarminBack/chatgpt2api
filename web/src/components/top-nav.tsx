@@ -6,8 +6,6 @@ import { Menu } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 
 import { HeaderActions } from "@/components/header-actions";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Sheet, SheetClose, SheetContent, SheetFooter, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import webConfig from "@/constants/common-env";
 import { fetchThirdPartyApps, type ThirdPartyAppsSettings } from "@/lib/api";
@@ -49,7 +47,6 @@ export function TopNav() {
   const router = useRouter();
   const [session, setSession] = useState<StoredAuthSession | null | undefined>(undefined);
   const [thirdPartyApps, setThirdPartyApps] = useState<ThirdPartyAppsSettings | null>(null);
-  const [isCanvasDialogOpen, setIsCanvasDialogOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -119,20 +116,12 @@ export function TopNav() {
   const baseUrl = webConfig.apiUrl.replace(/\/$/, "") || window.location.origin;
   const canvas = thirdPartyApps?.infinite_canvas;
   const canvasHref = canvas?.enabled && canvas.url.trim() ? buildThirdPartyHref(canvas.url, baseUrl, session.key) : "";
-  const canvasDisplayHref = canvasHref ? decodeURIComponent(canvasHref) : "";
 
   const handleCanvasOpen = () => {
     if (!canvasHref) {
       return;
     }
-    setIsCanvasDialogOpen(true);
-  };
-
-  const confirmCanvasOpen = () => {
-    if (canvasHref) {
-      window.open(canvasHref, "_blank", "noopener,noreferrer");
-    }
-    setIsCanvasDialogOpen(false);
+    window.open(canvasHref, "_blank", "noopener,noreferrer");
   };
 
   return (
@@ -238,32 +227,6 @@ export function TopNav() {
           </div>
         </div>
       </header>
-      <Dialog open={isCanvasDialogOpen} onOpenChange={setIsCanvasDialogOpen}>
-        <DialogContent showCloseButton={false} className="rounded-2xl p-6">
-          <DialogHeader className="gap-2">
-            <DialogTitle>跳转到三方应用</DialogTitle>
-            <DialogDescription className="text-sm leading-6">
-              该入口仅供个人测试使用，建议自行本机部署后再长期使用。跳转地址会默认带上本项目地址和当前密钥，用于自动填充连接信息；如果不放心，可以取消后手动前往应用并自行输入。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <div className="text-xs font-medium text-stone-500">完整跳转地址</div>
-            <div className="max-h-28 overflow-auto break-all rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 font-mono text-xs leading-5 text-stone-700">
-              {canvasDisplayHref}
-            </div>
-          </div>
-          <DialogFooter className="pt-2">
-            <DialogClose asChild>
-              <Button type="button" variant="outline" className="rounded-xl border-stone-200 bg-white text-stone-700">
-                取消
-              </Button>
-            </DialogClose>
-            <Button type="button" className="rounded-xl bg-stone-950 text-white hover:bg-stone-800" onClick={confirmCanvasOpen}>
-              继续跳转
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </>
   );
 }
