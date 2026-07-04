@@ -1,6 +1,6 @@
 # Codex Image3 Custom Maintenance Guide
 
-Last updated: 2026-07-03
+Last updated: 2026-07-04
 
 This document is the source of truth for the `image3.mewinyou.shop` custom build. If Codex receives only this document and repository access, it should understand what the custom behavior is, where it lives, how to update it, and how to verify it.
 
@@ -268,26 +268,30 @@ Keep future custom logic concentrated in `services/sub2api_billing_service.py` w
 
 ## Build And Deploy Image3
 
-Build on the server:
+Default deployment uses GitHub Actions to build and publish the image to GHCR.
+Avoid server-side `docker build` unless the GitHub workflow is unavailable and
+the user approves the temporary exception.
 
 ```bash
-ssh oracle
-cd /opt/chatgpt2api-image3-src
-sudo docker build \
-  --build-arg BUILDPLATFORM=linux/arm64 \
-  --build-arg TARGETPLATFORM=linux/arm64 \
-  --build-arg TARGETARCH=arm64 \
-  -t chatgpt2api:image3-custom-$(date +%Y%m%d%H%M%S) \
-  -t chatgpt2api:image3-custom .
+git checkout main
+git pull origin main
+git push origin main
 ```
 
-Switch image3 compose:
+The workflow `.github/workflows/docker-publish.yml` publishes:
+
+- `ghcr.io/carminback/chatgpt2api-image3:latest`
+- branch, tag, sha, and semver tags when applicable
+
+Switch image3 compose to the GHCR image:
 
 ```bash
 cd /opt/chatgpt2api-image3
-sudo cp docker-compose.yml docker-compose.yml.bak.$(date +%Y%m%d%H%M%S)
-sudo sed -i 's#image: chatgpt2api:.*#image: chatgpt2api:image3-custom#' docker-compose.yml
-sudo docker compose up -d
+sudo mkdir -p .codex-backups
+sudo cp docker-compose.yml .codex-backups/docker-compose.yml.$(date +%Y%m%d%H%M%S)
+sudo sed -i 's#image: .*#image: ghcr.io/carminback/chatgpt2api-image3:latest#' docker-compose.yml
+sudo docker compose pull app
+sudo docker compose up -d app
 ```
 
 Verify:

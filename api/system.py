@@ -432,7 +432,7 @@ td{{padding:8px 12px;border-top:1px solid #2a2d3a;font-size:14px}}tr:hover td{{b
 <body>
 <div class="header">
 <h1><span class="status-dot {'status-ok' if healthy else 'status-degraded'}"></span>号池健康监控</h1>
-<div style="font-size:13px;color:#94a3b8">v{app_version} · 30s 自动刷新</div>
+<div style="font-size:13px;color:#94a3b8">30s 自动刷新</div>
 </div>
 <div class="container">
 <div class="cards">
