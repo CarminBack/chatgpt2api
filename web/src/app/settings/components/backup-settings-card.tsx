@@ -384,10 +384,6 @@ export function BackupSettingsCard() {
                     <div className="text-xs text-stone-500">触发方式</div>
                     <div className="mt-1 font-medium text-stone-800">{detail.trigger || "—"}</div>
                   </div>
-                  <div>
-                    <div className="text-xs text-stone-500">应用版本</div>
-                    <div className="mt-1 font-medium text-stone-800">{detail.app_version || "—"}</div>
-                  </div>
                   <div className="md:col-span-2">
                     <div className="text-xs text-stone-500">存储后端</div>
                     <pre className="mt-1 overflow-x-auto rounded-lg border border-stone-200 bg-white px-3 py-2 text-xs text-stone-700">{JSON.stringify(detail.storage_backend || {}, null, 2)}</pre>
