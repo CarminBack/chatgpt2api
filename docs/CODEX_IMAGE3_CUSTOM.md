@@ -97,6 +97,15 @@ Third-party apps:
   configured canvas URL directly in a new tab and appends `apiKey` and `baseUrl`
   query parameters. It does not show a confirmation dialog before redirecting.
 
+Image model compatibility:
+
+- `gpt-image-2` is kept as a public compatibility model name, but image3 maps it
+  internally to `codex-gpt-image-2` to avoid the unstable ChatGPT web image
+  generation path.
+- Explicit client requests with `"model": "gpt-image-2"` therefore require an
+  available Codex-source image account, the same as direct
+  `codex-gpt-image-2` requests.
+
 Token2 image entry:
 
 - token2 injects `/token2-image-entry.js` from the 1Panel openresty site
