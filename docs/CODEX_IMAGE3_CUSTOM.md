@@ -125,9 +125,6 @@ Billing:
 - Billing happens before sending the image request upstream.
 - If upstream returns an error or the task fails, billing is refunded.
 - Duplicate image task submission with the same `client_task_id` returns the existing task and does not double charge.
-- Default image generation/edit model is `codex-gpt-image-2` so omitted-model
-  requests and the web UI avoid the older ChatGPT web `gpt-image-2` path when
-  it does not trigger the upstream image tool.
 
 Price formula:
 

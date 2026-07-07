@@ -56,14 +56,6 @@ const IMAGE_MODEL_STORAGE_KEY = "chatgpt2api:image_last_model";
 const IMAGE_COUNT_STORAGE_KEY = "chatgpt2api:image_last_count";
 const SCROLL_POSITIONS_STORAGE_KEY = "chatgpt2api:image_scroll_positions";
 const SCROLL_TO_LATEST_THRESHOLD = 160;
-const DEFAULT_IMAGE_MODEL: ImageModel = "codex-gpt-image-2";
-const IMAGE_MODEL_PRIORITY = [
-  "codex-gpt-image-2",
-  "plus-codex-gpt-image-2",
-  "team-codex-gpt-image-2",
-  "pro-codex-gpt-image-2",
-  "gpt-image-2",
-];
 
 function loadScrollPositions(): Map<string, number> {
   if (typeof window === "undefined") return new Map();
@@ -145,28 +137,17 @@ function dataUrlToFile(dataUrl: string, fileName: string, mimeType?: string) {
 }
 
 function filterImageModels(items: Model[]): ImageModel[] {
-  const models = items
+  return items
     .map((item) => String(item.id || "").trim())
     .filter((id, index, list) => id.toLowerCase().includes("image") && list.indexOf(id) === index);
-  return models.sort((a, b) => {
-    const ai = IMAGE_MODEL_PRIORITY.indexOf(a);
-    const bi = IMAGE_MODEL_PRIORITY.indexOf(b);
-    if (ai !== -1 || bi !== -1) {
-      return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
-    }
-    return a.localeCompare(b);
-  });
 }
 
 function normalizeStoredImageModel(value: string | null, availableModels: ImageModel[]): ImageModel {
   const normalized = String(value || "").trim();
-  if (normalized && normalized !== "gpt-image-2" && availableModels.includes(normalized)) {
+  if (normalized && availableModels.includes(normalized)) {
     return normalized;
   }
-  if (availableModels.includes(DEFAULT_IMAGE_MODEL)) {
-    return DEFAULT_IMAGE_MODEL;
-  }
-  return availableModels[0] || DEFAULT_IMAGE_MODEL;
+  return availableModels[0] || "gpt-image-2";
 }
 
 function buildReferenceImageFromResult(image: StoredImage, fileName: string): StoredReferenceImage | null {
@@ -480,8 +461,8 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   const [imageWidth, setImageWidth] = useState("1024");
   const [imageHeight, setImageHeight] = useState("1024");
   const [imageQuality, setImageQuality] = useState("auto");
-  const [imageModel, setImageModel] = useState<ImageModel>(DEFAULT_IMAGE_MODEL);
-  const [imageModels, setImageModels] = useState<ImageModel[]>([DEFAULT_IMAGE_MODEL]);
+  const [imageModel, setImageModel] = useState<ImageModel>("gpt-image-2");
+  const [imageModels, setImageModels] = useState<ImageModel[]>(["gpt-image-2"]);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [referenceImageFiles, setReferenceImageFiles] = useState<File[]>([]);
   const [referenceImages, setReferenceImages] = useState<StoredReferenceImage[]>([]);
@@ -709,14 +690,14 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         setImageModels(available);
         const storedModel = typeof window !== "undefined" ? window.localStorage.getItem(IMAGE_MODEL_STORAGE_KEY) : null;
         setImageModel((current) => {
-          if (current !== "gpt-image-2" && available.includes(current)) {
+          if (available.includes(current)) {
             return current;
           }
           return normalizeStoredImageModel(storedModel, available);
         });
       } catch {
         if (!cancelled) {
-          setImageModels([DEFAULT_IMAGE_MODEL]);
+          setImageModels(["gpt-image-2"]);
         }
       }
     };
