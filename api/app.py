@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from api import accounts, ai, image_tasks, redeem_codes, register, system
+from api import accounts, ai, image_tasks, redeem_codes, register, system, vwh_temp_mail
 from api.errors import install_exception_handlers
 from api.support import resolve_web_asset, start_full_account_refresh_watcher, start_limited_account_watcher
 from services.backup_service import backup_service
@@ -49,6 +49,7 @@ def create_app() -> FastAPI:
     app.include_router(image_tasks.create_router())
     app.include_router(redeem_codes.create_router())
     app.include_router(register.create_router())
+    app.include_router(vwh_temp_mail.create_router())
     app.include_router(system.create_router(app_version))
 
     @app.get("/{full_path:path}", include_in_schema=False)

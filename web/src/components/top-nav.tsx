@@ -19,6 +19,7 @@ const adminNavItems = [
   { href: "/logs", label: "日志管理" },
   { href: "/billing-logs", label: "扣费流水" },
   { href: "/redeem-codes", label: "兑换码" },
+  { href: "/temp-mail", label: "临时邮箱" },
   { href: "/debug", label: "调试" },
   { href: "/settings", label: "设置" },
 ];
