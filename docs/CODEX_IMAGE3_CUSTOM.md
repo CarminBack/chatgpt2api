@@ -1,6 +1,6 @@
 # Codex Image3 Custom Maintenance Guide
 
-Last updated: 2026-07-04
+Last updated: 2026-07-09
 
 This document is the source of truth for the `image3.mewinyou.shop` custom build. If Codex receives only this document and repository access, it should understand what the custom behavior is, where it lives, how to update it, and how to verify it.
 
@@ -48,6 +48,8 @@ Important runtime config keys:
   "sub2api_billing_dsn": "postgresql://<user>:<password>@sub2api-postgres:5432/sub2api",
   "sub2api_billing_allowed_group_names": [],
   "sub2api_billing_allowed_group_ids": [12],
+  "image_1k_only_sub2api_user_ids": [],
+  "image_1k_only_sub2api_key_ids": [],
   "image_price_per_request": 0.1
 }
 ```
@@ -57,6 +59,8 @@ Environment variable alternatives:
 - `SUB2API_BILLING_DSN`
 - `SUB2API_BILLING_ALLOWED_GROUP_NAMES`
 - `SUB2API_BILLING_ALLOWED_GROUP_IDS`
+- `IMAGE_1K_ONLY_SUB2API_USER_IDS`
+- `IMAGE_1K_ONLY_SUB2API_KEY_IDS`
 
 Current production policy:
 
@@ -134,6 +138,11 @@ Billing:
 - Billing happens before sending the image request upstream.
 - If upstream returns an error or the task fails, billing is refunded.
 - Duplicate image task submission with the same `client_task_id` returns the existing task and does not double charge.
+- `image_1k_only_sub2api_user_ids` and `image_1k_only_sub2api_key_ids`
+  can restrict selected token2 users or keys to 1K output only. Requests whose
+  parsed max `size` side is greater than 1024 are scaled proportionally so the
+  largest side is 1024 before billing and before upstream image generation.
+  Missing, empty, or `auto` size is treated as 1K and left unchanged.
 - Default image generation/edit model is `codex-gpt-image-2` so omitted-model
   requests and the web UI avoid the older ChatGPT web `gpt-image-2` path when
   it does not trigger the upstream image tool.

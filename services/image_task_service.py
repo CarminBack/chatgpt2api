@@ -11,6 +11,7 @@ from typing import Any
 
 from services.config import DATA_DIR, config
 from services.content_filter import request_text
+from services.image_access_policy import constrain_image_size
 from services.log_service import LOG_TYPE_CALL, log_service
 from services.protocol import openai_v1_image_edit, openai_v1_image_generations
 from services.sub2api_billing_service import sub2api_billing_service
@@ -140,6 +141,7 @@ class ImageTaskService:
         quality: str = "auto",
         base_url: str = "",
     ) -> dict[str, Any]:
+        size = constrain_image_size(identity, size)
         payload = {
             "prompt": prompt,
             "model": model,
@@ -166,6 +168,7 @@ class ImageTaskService:
         images: list[tuple[bytes, str, str]] | None = None,
         masks: list[tuple[bytes, str, str]] | None = None,
     ) -> dict[str, Any]:
+        size = constrain_image_size(identity, size)
         payload = {
             "prompt": prompt,
             "images": images or [],

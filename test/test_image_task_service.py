@@ -4,8 +4,10 @@ import json
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
+from services.config import config
 from services.image_task_service import ImageTaskService
 
 
@@ -143,6 +145,38 @@ class ImageTaskServiceTests(unittest.TestCase):
 
             self.assertEqual([item["status"] for item in result["items"]], ["error", "error"])
             self.assertTrue(all("已中断" in item.get("error", "") for item in result["items"]))
+
+    def test_1k_only_identity_scales_larger_task_before_handler(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            seen_size = ""
+
+            def handler(payload):
+                nonlocal seen_size
+                seen_size = str(payload.get("size") or "")
+                return {"data": [{"url": "http://example.test/image.png"}]}
+
+            service = self.make_service(Path(tmp_dir) / "image_tasks.json", handler)
+            identity = {
+                "id": "sub2api:93",
+                "name": "limited",
+                "role": "user",
+                "source": "sub2api",
+                "sub2api_user_id": 39,
+                "sub2api_key_id": 93,
+            }
+            with mock.patch.dict(config.data, {"image_1k_only_sub2api_user_ids": [39]}):
+                service.submit_generation(
+                    identity,
+                    client_task_id="too-large",
+                    prompt="cat",
+                    model="gpt-image-2",
+                    size="2048x2048",
+                    base_url="http://local.test",
+                )
+
+            task = wait_for_task(service, identity, "too-large", "success")
+            self.assertEqual(seen_size, "1024x1024")
+            self.assertEqual(task["size"], "1024x1024")
 
 
 if __name__ == "__main__":

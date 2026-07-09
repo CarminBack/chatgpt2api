@@ -11,6 +11,7 @@ from api.image_inputs import parse_image_edit_request, read_image_sources
 from api.support import require_identity, resolve_image_base_url
 from services.content_filter import check_request, request_shape, request_text
 from services.editable_file_task_service import editable_file_task_service
+from services.image_access_policy import constrain_image_size
 from services.log_service import LoggedCall
 from services.protocol import (
     anthropic_v1_messages,
@@ -172,6 +173,7 @@ def create_router() -> APIRouter:
     ):
         identity = require_identity(authorization)
         payload = body.model_dump(mode="python")
+        payload["size"] = constrain_image_size(identity, payload.get("size"))
         _attach_image_owner(payload, identity)
         payload["base_url"] = resolve_image_base_url(request)
         call = LoggedCall(identity, "/v1/images/generations", body.model, "文生图", request_text=body.prompt)
@@ -185,6 +187,7 @@ def create_router() -> APIRouter:
     ):
         identity = require_identity(authorization)
         payload, image_sources, mask_sources = await parse_image_edit_request(request)
+        payload["size"] = constrain_image_size(identity, payload.get("size"))
         _attach_image_owner(payload, identity)
         prompt = str(payload["prompt"])
         model = str(payload["model"])

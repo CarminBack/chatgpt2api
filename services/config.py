@@ -562,6 +562,10 @@ class ConfigStore:
     def sub2api_billing_allowed_group_ids(self) -> list[int]:
         env_value = os.getenv("SUB2API_BILLING_ALLOWED_GROUP_IDS")
         value = env_value if env_value is not None else self.data.get("sub2api_billing_allowed_group_ids")
+        return self._normalize_int_list(value)
+
+    @staticmethod
+    def _normalize_int_list(value: object) -> list[int]:
         if isinstance(value, str):
             items = value.split(",")
         elif isinstance(value, list):
@@ -577,6 +581,18 @@ class ConfigStore:
             if group_id > 0 and group_id not in normalized:
                 normalized.append(group_id)
         return normalized
+
+    @property
+    def image_1k_only_sub2api_user_ids(self) -> list[int]:
+        env_value = os.getenv("IMAGE_1K_ONLY_SUB2API_USER_IDS")
+        value = env_value if env_value is not None else self.data.get("image_1k_only_sub2api_user_ids")
+        return self._normalize_int_list(value)
+
+    @property
+    def image_1k_only_sub2api_key_ids(self) -> list[int]:
+        env_value = os.getenv("IMAGE_1K_ONLY_SUB2API_KEY_IDS")
+        value = env_value if env_value is not None else self.data.get("image_1k_only_sub2api_key_ids")
+        return self._normalize_int_list(value)
 
     @property
     def image_price_per_request(self) -> float:
@@ -626,6 +642,8 @@ class ConfigStore:
         data["sub2api_billing_enabled"] = self.sub2api_billing_enabled
         data["sub2api_billing_allowed_group_names"] = self.sub2api_billing_allowed_group_names
         data["sub2api_billing_allowed_group_ids"] = self.sub2api_billing_allowed_group_ids
+        data["image_1k_only_sub2api_user_ids"] = self.image_1k_only_sub2api_user_ids
+        data["image_1k_only_sub2api_key_ids"] = self.image_1k_only_sub2api_key_ids
         data["image_price_per_request"] = self.image_price_per_request
         data.pop("sub2api_billing_dsn", None)
         data.pop("auth-key", None)
