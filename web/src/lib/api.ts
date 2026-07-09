@@ -174,6 +174,8 @@ export type SettingsConfig = {
   image_remove_conversation_after_result?: boolean;
   image_settle_secs?: number | string;
   image_timeout_retry_secs?: number | string;
+  image_1k_only_sub2api_user_ids?: number[];
+  image_1k_only_sub2api_key_ids?: number[];
   auto_remove_invalid_accounts?: boolean;
   auto_remove_rate_limited_accounts?: boolean;
   auto_relogin_after_refresh?: boolean;

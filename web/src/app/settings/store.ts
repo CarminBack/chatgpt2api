@@ -128,6 +128,20 @@ function normalizeThirdPartyApps(value: unknown): ThirdPartyAppsSettings {
   };
 }
 
+function normalizeIdList(value: unknown): number[] {
+  const items = Array.isArray(value)
+    ? value
+    : String(value || "").split(/[,\s]+/);
+  const normalized: number[] = [];
+  for (const item of items) {
+    const id = Number(String(item).trim());
+    if (Number.isInteger(id) && id > 0 && !normalized.includes(id)) {
+      normalized.push(id);
+    }
+  }
+  return normalized;
+}
+
 function normalizeConfig(config: SettingsConfig): SettingsConfig {
   const imageStorage = typeof config.image_storage === "object" && config.image_storage
     ? config.image_storage as ImageStorageSettings
@@ -182,6 +196,8 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
     image_remove_conversation_after_result: Boolean(config.image_remove_conversation_after_result),
     image_settle_secs: Number(config.image_settle_secs || 2.0),
     image_timeout_retry_secs: Number(config.image_timeout_retry_secs || 30),
+    image_1k_only_sub2api_user_ids: normalizeIdList(config.image_1k_only_sub2api_user_ids),
+    image_1k_only_sub2api_key_ids: normalizeIdList(config.image_1k_only_sub2api_key_ids),
     auto_remove_invalid_accounts: Boolean(config.auto_remove_invalid_accounts),
     auto_remove_rate_limited_accounts: Boolean(config.auto_remove_rate_limited_accounts),
     auto_relogin_after_refresh: Boolean(config.auto_relogin_after_refresh),
@@ -307,6 +323,8 @@ type SettingsStore = {
   setImageRemoveConversationAfterResult: (value: boolean) => void;
   setImageSettleSecs: (value: string) => void;
   setImageTimeoutRetrySecs: (value: string) => void;
+  setImage1kOnlySub2APIUserIdsText: (value: string) => void;
+  setImage1kOnlySub2APIKeyIdsText: (value: string) => void;
   setAutoRemoveInvalidAccounts: (value: boolean) => void;
   setAutoRemoveRateLimitedAccounts: (value: boolean) => void;
   setAutoReloginAfterRefresh: (value: boolean) => void;
@@ -455,6 +473,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         image_remove_conversation_after_result: Boolean(config.image_remove_conversation_after_result),
         image_settle_secs: Math.max(0.5, Number(config.image_settle_secs) || 2.0),
         image_timeout_retry_secs: Math.max(1, Number(config.image_timeout_retry_secs) || 30),
+        image_1k_only_sub2api_user_ids: normalizeIdList(config.image_1k_only_sub2api_user_ids),
+        image_1k_only_sub2api_key_ids: normalizeIdList(config.image_1k_only_sub2api_key_ids),
         auto_remove_invalid_accounts: Boolean(config.auto_remove_invalid_accounts),
         auto_remove_rate_limited_accounts: Boolean(config.auto_remove_rate_limited_accounts),
         auto_relogin_after_refresh: Boolean(config.auto_relogin_after_refresh),
@@ -574,6 +594,14 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
 
   setImageTimeoutRetrySecs: (value) => {
     set((state) => state.config ? { config: { ...state.config, image_timeout_retry_secs: value } } : {});
+  },
+
+  setImage1kOnlySub2APIUserIdsText: (value) => {
+    set((state) => state.config ? { config: { ...state.config, image_1k_only_sub2api_user_ids: normalizeIdList(value) } } : {});
+  },
+
+  setImage1kOnlySub2APIKeyIdsText: (value) => {
+    set((state) => state.config ? { config: { ...state.config, image_1k_only_sub2api_key_ids: normalizeIdList(value) } } : {});
   },
 
   setAutoRemoveInvalidAccounts: (value) => {

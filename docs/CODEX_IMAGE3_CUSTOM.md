@@ -263,10 +263,16 @@ Primary custom files:
 - `services/image_task_service.py`
   - async image task billing/refund
   - attaches image owner metadata for task-generated images
+- `services/image_access_policy.py`
+  - token2 user/key 1K-only image size constraint
+- `web/src/app/settings/components/image-access-policy-card.tsx`
+  - admin settings panel for token2 user/key 1K-only lists
+- `web/src/app/settings/store.ts`
+  - settings form state for image 1K-only user/key lists
 - `api/image_tasks.py`
   - converts billing errors to HTTP responses
 - `services/config.py`
-  - runtime config getters for token2 billing and group whitelist
+  - runtime config getters for token2 billing, group whitelist, and image size policy
 - `services/image_storage_service.py`
   - stores `owner_id` / `owner_name` for new images
   - filters image index items by owner for normal users
