@@ -291,6 +291,7 @@ export type ImageBillingLog = {
   amount: string;
   balance_before: string;
   balance_after: string;
+  service: string;
   mode: string;
   model: string;
   prompt_preview: string;

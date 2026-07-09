@@ -89,6 +89,7 @@ def _billing_log_item(row: dict[str, object], *, include_user_fields: bool = Tru
         "amount": str(row.get("amount") or "0"),
         "balance_before": str(row.get("balance_before") or "0"),
         "balance_after": str(row.get("balance_after") or "0"),
+        "service": row.get("service") or "legacy",
         "mode": row.get("mode") or "",
         "model": row.get("model") or "",
         "prompt_preview": row.get("prompt_preview") or "",

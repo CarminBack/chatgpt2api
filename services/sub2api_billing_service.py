@@ -10,6 +10,8 @@ from psycopg2.extras import RealDictCursor
 
 from services.config import config
 
+SERVICE_NAME = "image3"
+
 
 class Sub2APIBillingError(Exception):
     pass
@@ -64,6 +66,7 @@ CREATE TABLE IF NOT EXISTS custom_image_billing_logs (
   amount NUMERIC(20,8) NOT NULL DEFAULT 0,
   balance_before NUMERIC(20,8) NOT NULL DEFAULT 0,
   balance_after NUMERIC(20,8) NOT NULL DEFAULT 0,
+  service TEXT NOT NULL DEFAULT 'image3',
   mode TEXT NOT NULL DEFAULT '',
   model TEXT NOT NULL DEFAULT '',
   prompt_preview TEXT NOT NULL DEFAULT '',
@@ -71,6 +74,7 @@ CREATE TABLE IF NOT EXISTS custom_image_billing_logs (
 )
 """
         )
+        cur.execute("ALTER TABLE custom_image_billing_logs ADD COLUMN IF NOT EXISTS service TEXT NOT NULL DEFAULT 'legacy'")
 
     @staticmethod
     def _log_event(
@@ -95,8 +99,8 @@ CREATE TABLE IF NOT EXISTS custom_image_billing_logs (
             """
 INSERT INTO custom_image_billing_logs (
   action, status, user_id, api_key_id, api_key, user_email,
-  task_id, amount, balance_before, balance_after, mode, model, prompt_preview, error
-) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+  task_id, amount, balance_before, balance_after, service, mode, model, prompt_preview, error
+) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 """,
             (
                 action,
@@ -109,6 +113,7 @@ INSERT INTO custom_image_billing_logs (
                 str(amount),
                 str(balance_before),
                 str(balance_after),
+                SERVICE_NAME,
                 mode,
                 model,
                 prompt_preview,
@@ -489,7 +494,7 @@ FOR UPDATE
         end_date: str = "",
     ) -> list[dict[str, Any]]:
         sql = [
-            "SELECT id, created_at, action, status, user_id, api_key_id, api_key, user_email, task_id, amount, balance_before, balance_after, mode, model, prompt_preview, error",
+            "SELECT id, created_at, action, status, user_id, api_key_id, api_key, user_email, task_id, amount, balance_before, balance_after, service, mode, model, prompt_preview, error",
             "FROM custom_image_billing_logs",
             "WHERE 1=1",
         ]

@@ -31,6 +31,12 @@ const modeLabels: Record<string, string> = {
   edit: "改图",
 };
 
+const serviceLabels: Record<string, string> = {
+  image3: "image3",
+  chatgpt2api: "4001",
+  legacy: "旧记录",
+};
+
 function amountValue(value: string) {
   const parsed = Number(value || 0);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -191,12 +197,13 @@ function BillingContent({ isAdmin }: { isAdmin: boolean }) {
             </Button>
           </div>
           <div className="overflow-x-auto">
-            <Table className="min-w-[1180px]">
+            <Table className="min-w-[1260px]">
               <TableHeader>
                 <TableRow>
                   <TableHead>时间</TableHead>
                   {isAdmin ? <TableHead>用户</TableHead> : null}
                   <TableHead>Key</TableHead>
+                  <TableHead>来源</TableHead>
                   <TableHead>动作</TableHead>
                   <TableHead>金额</TableHead>
                   <TableHead>扣前余额</TableHead>
@@ -220,6 +227,11 @@ function BillingContent({ isAdmin }: { isAdmin: boolean }) {
                     <TableCell>
                       <div className="font-mono text-xs text-stone-600">{item.api_key}</div>
                       <div className="text-xs text-stone-400">id {item.api_key_id}</div>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="secondary" className="rounded-md">
+                        {serviceLabels[item.service] || item.service || "-"}
+                      </Badge>
                     </TableCell>
                     <TableCell>
                       <Badge variant={actionVariant(item.action, item.status)} className="rounded-md">

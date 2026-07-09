@@ -189,6 +189,10 @@ Balance and usage updates:
 - Refunds add money back to `users.balance` and decrement usage counters,
   clamped at zero.
 - Writes all debit/refund events to `custom_image_billing_logs`.
+- `custom_image_billing_logs.service` records which service wrote the row:
+  `image3` for port 4003/image3, `chatgpt2api` for port 4001, and `legacy`
+  for historical rows created before this column existed. The image3 `/billing`
+  page shows this source column so cross-service billing can be diagnosed.
 - Admins can view all `custom_image_billing_logs` in image3 at `/billing`.
   Normal token2 users can also open `/billing`, but the API force-filters their
   results to the current authenticated `sub2api_key_id`. This is the
@@ -213,6 +217,9 @@ The custom billing code directly reads/writes token2 PostgreSQL tables. If token
 Required tables and columns:
 
 ```text
+custom_image_billing_logs:
+  service
+
 api_keys:
   id, user_id, key, group_id, status, deleted_at,
   quota, quota_used, last_used_at,
