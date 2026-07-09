@@ -121,6 +121,9 @@ Token2 image entry:
   token2 browser session (`localStorage.auth_token`) to call `/api/v1/keys`,
   chooses the first active key from `group_id=12`, opens a new browser tab, and
   redirects that tab to image3 with the key in the URL hash.
+- The script must only inject into token2's real menu/sidebar container. Do not
+  treat brand/header dashboard links such as the `TokenPush` logo as menu
+  anchors; otherwise the injected text can break the top-left layout.
 - If the current token2 user has no active `group_id=12` key, the script creates
   one with name `image3自动生成` and no quota. A missing quota means the key has
   no separate key cap; image3 still debits the token2 user wallet. Admins can add

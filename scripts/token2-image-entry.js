@@ -5,6 +5,30 @@
   const IMAGE_GROUP_ID = 12;
   const AUTO_KEY_NAME = "image3自动生成";
   const LABEL = "图片生成";
+  const MENU_NEIGHBOR_PATHS = new Set([
+    "/accounts",
+    "/admin/accounts",
+    "/admin/announcements",
+    "/admin/channel-monitor",
+    "/admin/channels",
+    "/admin/groups",
+    "/admin/ops",
+    "/admin/payment",
+    "/admin/proxies",
+    "/admin/redeem",
+    "/admin/settings",
+    "/admin/subscriptions",
+    "/admin/usage",
+    "/admin/users",
+    "/affiliate",
+    "/available-channels",
+    "/keys",
+    "/payment",
+    "/profile",
+    "/redeem",
+    "/subscriptions",
+    "/usage",
+  ]);
   const ICON =
     '<svg class="h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15.75 7.5 10.5a2.25 2.25 0 0 1 3 0l3 3 1.5-1.5a2.25 2.25 0 0 1 3 0l3.75 3.75M3.75 19.5h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm11.25-9.75h.008v.008H15V9.75Z" /></svg>';
 
@@ -19,6 +43,26 @@
   function isDashboard(anchor) {
     const path = normalizePath(anchor);
     return path === "/dashboard" || path === "/admin/dashboard";
+  }
+
+  function isLikelyMenuContainer(container, dashboardLink) {
+    if (!container || container.closest("header, [role='banner']")) return false;
+    const anchors = Array.from(container.querySelectorAll("a[href]"));
+    if (anchors.length < 2) return false;
+    if (container.querySelector("[data-tour^='sidebar-'], [id^='sidebar-']")) return true;
+    return anchors.some((anchor) => anchor !== dashboardLink && MENU_NEIGHBOR_PATHS.has(normalizePath(anchor)));
+  }
+
+  function findMenuContainer(dashboardLink) {
+    const nav = dashboardLink.closest("nav");
+    if (isLikelyMenuContainer(nav, dashboardLink)) return nav;
+
+    let current = dashboardLink.parentElement;
+    for (let depth = 0; current && depth < 5; depth += 1) {
+      if (isLikelyMenuContainer(current, dashboardLink)) return current;
+      current = current.parentElement;
+    }
+    return null;
   }
 
   function inactiveTemplate(nav, dashboardLink) {
@@ -192,7 +236,9 @@
     const template = inactiveTemplate(nav, dashboardLink);
     const link = template.cloneNode(true);
     link.setAttribute(ENTRY_ATTR, "1");
+    link.setAttribute("data-tour", "sidebar-image-generation");
     link.setAttribute("href", IMAGE3_LOGIN_URL);
+    link.removeAttribute("id");
     link.removeAttribute("aria-current");
     link.classList.remove("router-link-active", "router-link-exact-active");
     normalizeIconSize(link);
@@ -207,7 +253,7 @@
   function inject() {
     const dashboards = Array.from(document.querySelectorAll("a[href]")).filter(isDashboard);
     for (const dashboardLink of dashboards) {
-      const nav = dashboardLink.closest("nav") || dashboardLink.parentElement;
+      const nav = findMenuContainer(dashboardLink);
       if (!nav || nav.querySelector(`[${ENTRY_ATTR}]`)) continue;
       dashboardLink.insertAdjacentElement("afterend", buildEntry(nav, dashboardLink));
     }
