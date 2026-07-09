@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
@@ -20,6 +22,7 @@ from services.protocol import (
     openai_v1_response,
     openai_search,
 )
+from services.sub2api_billing_service import Sub2APIBillingError, sub2api_billing_service
 
 
 class ImageGenerationRequest(BaseModel):
@@ -78,22 +81,78 @@ async def filter_or_log(call: LoggedCall, text: str) -> None:
         raise
 
 
+def _clean(value: object, default: str = "") -> str:
+    return str(value or default).strip()
+
+
+def _token_value(identity: dict[str, object]) -> str:
+    return _clean(identity.get("token"))
+
+
+def _should_bill_sub2api(identity: dict[str, object]) -> bool:
+    return bool("sub2api" in str(identity.get("source") or "") and _token_value(identity))
+
+
 def create_router() -> APIRouter:
     router = APIRouter()
 
     async def run_image_call_with_quota(identity: dict[str, object], amount: int, call: LoggedCall, handler, payload):
         quota_reserved = False
+        charged_amount = Decimal("0")
+        token = _token_value(identity)
+        mode = "edit" if call.endpoint.endswith("/edits") else "generate"
+        model = _clean(payload.get("model"), call.model)
+        task_id = _clean(payload.get("client_task_id")) or f"{int(call.started * 1000)}-{mode}"
+        prompt_preview = request_text(payload.get("prompt"))
         try:
-            quota_reserved = auth_service.reserve_image_quota(identity, amount)
+            if _should_bill_sub2api(identity):
+                _, unit_price, charged_amount, _ = await run_in_threadpool(
+                    sub2api_billing_service.debit_image_balance,
+                    raw_key=token,
+                    image_count=amount,
+                    size=_clean(payload.get("size")) or None,
+                    task_id=task_id,
+                    mode=mode,
+                    model=model,
+                    prompt_preview=prompt_preview,
+                )
+                if charged_amount <= 0 or unit_price <= 0:
+                    raise Sub2APIBillingError("图片单价未配置")
+            else:
+                quota_reserved = auth_service.reserve_image_quota(identity, amount)
             result = await call.run(handler, payload)
             if quota_reserved and getattr(result, "status_code", 200) >= 400:
                 auth_service.refund_image_quota(str(identity.get("id") or ""), amount)
+            if charged_amount > 0 and getattr(result, "status_code", 200) >= 400:
+                await run_in_threadpool(
+                    sub2api_billing_service.refund_user_balance,
+                    raw_key=token,
+                    amount=charged_amount,
+                    task_id=task_id,
+                    mode=mode,
+                    model=model,
+                    prompt_preview=prompt_preview,
+                    error=f"HTTP {getattr(result, 'status_code', '')}",
+                )
             return result
+        except Sub2APIBillingError as exc:
+            raise HTTPException(status_code=402, detail={"error": str(exc)}) from exc
         except ImageQuotaExceeded as exc:
             raise HTTPException(status_code=429, detail={"error": str(exc)}) from exc
         except Exception:
             if quota_reserved:
                 auth_service.refund_image_quota(str(identity.get("id") or ""), amount)
+            if charged_amount > 0:
+                await run_in_threadpool(
+                    sub2api_billing_service.refund_user_balance,
+                    raw_key=token,
+                    amount=charged_amount,
+                    task_id=task_id,
+                    mode=mode,
+                    model=model,
+                    prompt_preview=prompt_preview,
+                    error="调用异常，自动退款",
+                )
             raise
 
     @router.get("/v1/models")

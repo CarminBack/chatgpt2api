@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+import re
 from typing import Any
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
 from services.config import config
+
+SERVICE_NAME = "chatgpt2api"
 
 
 class Sub2APIBillingError(Exception):
@@ -25,12 +28,18 @@ class Sub2APIKeyIdentity:
     balance: Decimal
     key_quota: Decimal
     key_quota_used: Decimal
+    group_id: int | None = None
+    group_name: str = ""
+    group_status: str = ""
+    allow_image_generation: bool | None = None
+    image_price_1k: Decimal | None = None
+    image_price_2k: Decimal | None = None
+    image_price_4k: Decimal | None = None
+    image_rate_multiplier: Decimal = Decimal("1")
+    user_group_rate_multiplier: Decimal = Decimal("1")
 
 
 class Sub2APIBillingService:
-    def __init__(self) -> None:
-        self._dsn: str | None = None
-
     def _get_dsn(self) -> str:
         dsn = config.sub2api_billing_dsn
         if not dsn:
@@ -57,6 +66,7 @@ CREATE TABLE IF NOT EXISTS custom_image_billing_logs (
   amount NUMERIC(20,8) NOT NULL DEFAULT 0,
   balance_before NUMERIC(20,8) NOT NULL DEFAULT 0,
   balance_after NUMERIC(20,8) NOT NULL DEFAULT 0,
+  service TEXT NOT NULL DEFAULT 'chatgpt2api',
   mode TEXT NOT NULL DEFAULT '',
   model TEXT NOT NULL DEFAULT '',
   prompt_preview TEXT NOT NULL DEFAULT '',
@@ -64,6 +74,7 @@ CREATE TABLE IF NOT EXISTS custom_image_billing_logs (
 )
 """
         )
+        cur.execute("ALTER TABLE custom_image_billing_logs ADD COLUMN IF NOT EXISTS service TEXT NOT NULL DEFAULT 'legacy'")
 
     @staticmethod
     def _log_event(
@@ -88,8 +99,8 @@ CREATE TABLE IF NOT EXISTS custom_image_billing_logs (
             """
 INSERT INTO custom_image_billing_logs (
   action, status, user_id, api_key_id, api_key, user_email,
-  task_id, amount, balance_before, balance_after, mode, model, prompt_preview, error
-) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+  task_id, amount, balance_before, balance_after, service, mode, model, prompt_preview, error
+) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 """,
             (
                 action,
@@ -102,6 +113,7 @@ INSERT INTO custom_image_billing_logs (
                 str(amount),
                 str(balance_before),
                 str(balance_after),
+                SERVICE_NAME,
                 mode,
                 model,
                 prompt_preview,
@@ -116,28 +128,31 @@ INSERT INTO custom_image_billing_logs (
         except (InvalidOperation, ValueError):
             return Decimal("0")
 
-    def validate_api_key(self, raw_key: str) -> Sub2APIKeyIdentity:
-        key = str(raw_key or "").strip()
-        if not key:
-            raise Sub2APIBillingError("API key 不能为空")
-        sql = """
-SELECT k.id AS key_id, k.key, k.user_id, k.status AS key_status, k.quota, k.quota_used,
-       u.email AS user_email, u.status AS user_status, u.balance
-FROM api_keys k
-JOIN users u ON u.id = k.user_id
-WHERE k.key = %s AND k.deleted_at IS NULL
-LIMIT 1
-"""
-        with self._connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql, (key,))
-                row = cur.fetchone()
-        if not row:
-            raise Sub2APIBillingError("sub2api API key 不存在")
-        if str(row["key_status"] or "").lower() != "active":
-            raise Sub2APIBillingError("sub2api API key 已禁用")
-        if str(row["user_status"] or "").lower() != "active":
-            raise Sub2APIBillingError("sub2api 用户已禁用")
+    @classmethod
+    def _optional_decimal(cls, value: object) -> Decimal | None:
+        if value is None or str(value).strip() == "":
+            return None
+        return cls._to_decimal(value)
+
+    @staticmethod
+    def _is_false(value: object) -> bool:
+        if isinstance(value, str):
+            return value.strip().lower() in {"0", "false", "no", "off"}
+        return value is False
+
+    @staticmethod
+    def _size_tier(size: str | None) -> str:
+        text = str(size or "").strip().lower()
+        numbers = [int(item) for item in re.findall(r"\d+", text)]
+        max_side = max(numbers) if numbers else 1024
+        if max_side <= 1024:
+            return "1k"
+        if max_side <= 2048:
+            return "2k"
+        return "4k"
+
+    def _identity_from_row(self, key: str, row: dict[str, Any]) -> Sub2APIKeyIdentity:
+        group_id = row.get("group_id")
         return Sub2APIKeyIdentity(
             key=key,
             key_id=int(row["key_id"]),
@@ -148,7 +163,164 @@ LIMIT 1
             balance=self._to_decimal(row["balance"]),
             key_quota=self._to_decimal(row.get("quota")),
             key_quota_used=self._to_decimal(row.get("quota_used")),
+            group_id=int(group_id) if group_id is not None else None,
+            group_name=str(row.get("group_name") or "").strip(),
+            group_status=str(row.get("group_status") or "").strip(),
+            allow_image_generation=row.get("allow_image_generation"),
+            image_price_1k=self._optional_decimal(row.get("image_price_1k")),
+            image_price_2k=self._optional_decimal(row.get("image_price_2k")),
+            image_price_4k=self._optional_decimal(row.get("image_price_4k")),
+            image_rate_multiplier=self._to_decimal(row.get("image_rate_multiplier") or 1) or Decimal("1"),
+            user_group_rate_multiplier=self._to_decimal(row.get("user_group_rate_multiplier") or 1) or Decimal("1"),
         )
+
+    def _validate_row(self, row: dict[str, Any] | None) -> None:
+        if not row:
+            raise Sub2APIBillingError("sub2api API key 不存在")
+        if str(row["key_status"] or "").lower() != "active":
+            raise Sub2APIBillingError("sub2api API key 已禁用")
+        if str(row["user_status"] or "").lower() != "active":
+            raise Sub2APIBillingError("sub2api 用户已禁用")
+        group_status = str(row.get("group_status") or "").strip().lower()
+        if group_status and group_status != "active":
+            raise Sub2APIBillingError("sub2api 分组已禁用")
+        allowed_group_ids = getattr(config, "sub2api_billing_allowed_group_ids", [])
+        allowed_group_names = getattr(config, "sub2api_billing_allowed_group_names", [])
+        if allowed_group_ids or allowed_group_names:
+            group_id = row.get("group_id")
+            try:
+                normalized_group_id = int(group_id) if group_id is not None else 0
+            except (TypeError, ValueError):
+                normalized_group_id = 0
+            group_name = str(row.get("group_name") or "").strip().lower()
+            if normalized_group_id not in allowed_group_ids and group_name not in allowed_group_names:
+                allowed = ", ".join([*allowed_group_names, *[str(item) for item in allowed_group_ids]])
+                raise Sub2APIBillingError(f"当前 sub2api 分组不允许访问 image3，请使用 {allowed} 分组的密钥")
+
+    def _select_key_sql(self, *, for_update: bool = False) -> str:
+        suffix = "FOR UPDATE OF k, u" if for_update else "LIMIT 1"
+        return f"""
+SELECT
+  k.id AS key_id, k.key, k.user_id, k.status AS key_status, k.quota, k.quota_used, k.group_id,
+  u.email AS user_email, u.status AS user_status, u.balance,
+  g.name AS group_name, g.status AS group_status, g.allow_image_generation,
+  g.image_price_1k, g.image_price_2k, g.image_price_4k, g.image_rate_multiplier,
+  ugrm.rate_multiplier AS user_group_rate_multiplier
+FROM api_keys k
+JOIN users u ON u.id = k.user_id
+LEFT JOIN groups g ON g.id = k.group_id AND g.deleted_at IS NULL
+LEFT JOIN user_group_rate_multipliers ugrm ON ugrm.user_id = k.user_id AND ugrm.group_id = k.group_id
+WHERE k.key = %s AND k.deleted_at IS NULL
+{suffix}
+"""
+
+    @staticmethod
+    def _usage_window_starts_sql() -> str:
+        return """
+window_5h_start = COALESCE(window_5h_start, now()),
+window_1d_start = COALESCE(window_1d_start, now()),
+window_7d_start = COALESCE(window_7d_start, now())
+"""
+
+    def _increment_key_usage(self, cur, *, key_id: int, amount: Decimal) -> None:
+        cur.execute(
+            f"""
+UPDATE api_keys
+SET
+  quota_used = COALESCE(quota_used, 0) + %s,
+  usage_5h = COALESCE(usage_5h, 0) + %s,
+  usage_1d = COALESCE(usage_1d, 0) + %s,
+  usage_7d = COALESCE(usage_7d, 0) + %s,
+  last_used_at = now(),
+  updated_at = now(),
+  {self._usage_window_starts_sql()}
+WHERE id = %s
+""",
+            (str(amount), str(amount), str(amount), str(amount), key_id),
+        )
+
+    def _decrement_key_usage(self, cur, *, key_id: int, amount: Decimal) -> None:
+        cur.execute(
+            f"""
+UPDATE api_keys
+SET
+  quota_used = GREATEST(COALESCE(quota_used, 0) - %s, 0),
+  usage_5h = GREATEST(COALESCE(usage_5h, 0) - %s, 0),
+  usage_1d = GREATEST(COALESCE(usage_1d, 0) - %s, 0),
+  usage_7d = GREATEST(COALESCE(usage_7d, 0) - %s, 0),
+  updated_at = now()
+WHERE id = %s
+""",
+            (str(amount), str(amount), str(amount), str(amount), key_id),
+        )
+
+    def validate_api_key(self, raw_key: str) -> Sub2APIKeyIdentity:
+        key = str(raw_key or "").strip()
+        if not key:
+            raise Sub2APIBillingError("API key 不能为空")
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(self._select_key_sql(), (key,))
+                row = cur.fetchone()
+        self._validate_row(row)
+        return self._identity_from_row(key, row)
+
+    def image_unit_price(self, identity: Sub2APIKeyIdentity, *, size: str | None = None) -> Decimal:
+        if self._is_false(identity.allow_image_generation):
+            raise Sub2APIBillingError("当前 sub2api 分组未开启图片生成")
+        tier = self._size_tier(size)
+        group_price = {
+            "1k": identity.image_price_1k,
+            "2k": identity.image_price_2k,
+            "4k": identity.image_price_4k,
+        }[tier]
+        base_price = group_price if group_price is not None else self._to_decimal(config.image_price_per_request)
+        group_multiplier = identity.image_rate_multiplier if identity.image_rate_multiplier > 0 else Decimal("1")
+        user_multiplier = (
+            identity.user_group_rate_multiplier
+            if identity.user_group_rate_multiplier > 0
+            else Decimal("1")
+        )
+        return (base_price * group_multiplier * user_multiplier).quantize(Decimal("0.00000001"))
+
+    def image_charge_amount(
+        self,
+        raw_key: str,
+        *,
+        image_count: int = 1,
+        size: str | None = None,
+    ) -> tuple[Sub2APIKeyIdentity, Decimal, Decimal]:
+        identity = self.validate_api_key(raw_key)
+        unit_price = self.image_unit_price(identity, size=size)
+        amount = unit_price * Decimal(max(0, int(image_count or 0)))
+        return identity, unit_price, amount.quantize(Decimal("0.00000001"))
+
+    def _uses_key_quota(self, identity: Sub2APIKeyIdentity) -> bool:
+        return self._to_decimal(identity.key_quota) > 0
+
+    def _key_remaining(self, identity: Sub2APIKeyIdentity) -> Decimal:
+        return self._to_decimal(identity.key_quota) - self._to_decimal(identity.key_quota_used)
+
+    def _insufficient_funds_error(self, identity: Sub2APIKeyIdentity, amount: Decimal) -> str:
+        balance = self._to_decimal(identity.balance)
+        if balance < amount:
+            return f"余额不足：当前 {balance}，需要 {amount}"
+        if self._uses_key_quota(identity):
+            key_remaining = self._key_remaining(identity)
+            if key_remaining < amount:
+                return f"秘钥余额不足：当前 {key_remaining}，需要 {amount}"
+        return ""
+
+    def _charge_balance_before(self, identity: Sub2APIKeyIdentity) -> Decimal:
+        if self._uses_key_quota(identity):
+            return self._key_remaining(identity)
+        return self._to_decimal(identity.balance)
+
+    def _display_balance_after_refund(self, *, key_quota: Decimal, key_quota_used: Decimal, amount: Decimal) -> Decimal:
+        key_remaining = key_quota - key_quota_used
+        if key_quota > 0:
+            return min(key_quota, key_remaining + amount)
+        return key_remaining + amount
 
     def debit_user_balance(
         self,
@@ -167,78 +339,78 @@ LIMIT 1
         with self._connect() as conn:
             with conn.cursor() as cur:
                 self._ensure_log_table(cur)
-                cur.execute(
-                    """
-SELECT k.id AS key_id, k.key, k.user_id, k.status AS key_status, k.quota, k.quota_used,
-       u.email AS user_email, u.status AS user_status, u.balance
-FROM api_keys k
-JOIN users u ON u.id = k.user_id
-WHERE k.key = %s AND k.deleted_at IS NULL
-FOR UPDATE
-""",
-                    (key,),
-                )
+                cur.execute(self._select_key_sql(for_update=True), (key,))
                 row = cur.fetchone()
-                if not row:
-                    raise Sub2APIBillingError("sub2api API key 不存在")
-                if str(row["key_status"] or "").lower() != "active":
-                    raise Sub2APIBillingError("sub2api API key 已禁用")
-                if str(row["user_status"] or "").lower() != "active":
-                    raise Sub2APIBillingError("sub2api 用户已禁用")
-                balance = self._to_decimal(row["balance"])
-                if balance < amount:
+                self._validate_row(row)
+                identity = self._identity_from_row(key, row)
+                balance_before = self._charge_balance_before(identity)
+                insufficient_error = self._insufficient_funds_error(identity, amount)
+                if insufficient_error:
                     self._log_event(
                         cur,
                         action="debit",
                         status="failed",
-                        user_id=int(row["user_id"]),
-                        api_key_id=int(row["key_id"]),
+                        user_id=identity.user_id,
+                        api_key_id=identity.key_id,
                         api_key=key,
-                        user_email=str(row["user_email"] or "").strip(),
+                        user_email=identity.user_email,
                         task_id=task_id,
                         amount=amount,
-                        balance_before=balance,
-                        balance_after=balance,
+                        balance_before=balance_before,
+                        balance_after=balance_before,
                         mode=mode,
                         model=model,
                         prompt_preview=prompt_preview,
-                        error=f"余额不足：当前 {balance}，需要 {amount}",
+                        error=insufficient_error,
                     )
-                    raise Sub2APIBillingError(f"余额不足：当前 {balance}，需要 {amount}")
-                next_balance = balance - amount
+                    raise Sub2APIBillingError(insufficient_error)
+                next_balance = balance_before - amount
+                user_balance_after = self._to_decimal(identity.balance) - amount
                 cur.execute(
                     "UPDATE users SET balance = %s, updated_at = now() WHERE id = %s",
-                    (str(next_balance), int(row["user_id"])),
+                    (str(user_balance_after), identity.user_id),
                 )
+                self._increment_key_usage(cur, key_id=identity.key_id, amount=amount)
                 self._log_event(
                     cur,
                     action="debit",
                     status="success",
-                    user_id=int(row["user_id"]),
-                    api_key_id=int(row["key_id"]),
+                    user_id=identity.user_id,
+                    api_key_id=identity.key_id,
                     api_key=key,
-                    user_email=str(row["user_email"] or "").strip(),
+                    user_email=identity.user_email,
                     task_id=task_id,
                     amount=amount,
-                    balance_before=balance,
+                    balance_before=balance_before,
                     balance_after=next_balance,
                     mode=mode,
                     model=model,
                     prompt_preview=prompt_preview,
                 )
             conn.commit()
-        identity = Sub2APIKeyIdentity(
-            key=key,
-            key_id=int(row["key_id"]),
-            user_id=int(row["user_id"]),
-            user_email=str(row["user_email"] or "").strip(),
-            key_status=str(row["key_status"] or ""),
-            user_status=str(row["user_status"] or ""),
-            balance=next_balance,
-            key_quota=self._to_decimal(row.get("quota")),
-            key_quota_used=self._to_decimal(row.get("quota_used")),
-        )
         return identity, next_balance
+
+    def debit_image_balance(
+        self,
+        *,
+        raw_key: str,
+        image_count: int = 1,
+        size: str | None = None,
+        task_id: str = "",
+        mode: str = "",
+        model: str = "",
+        prompt_preview: str = "",
+    ) -> tuple[Sub2APIKeyIdentity, Decimal, Decimal, Decimal]:
+        identity, unit_price, amount = self.image_charge_amount(raw_key, image_count=image_count, size=size)
+        _, balance_after = self.debit_user_balance(
+            raw_key=raw_key,
+            amount=amount,
+            task_id=task_id,
+            mode=mode,
+            model=model,
+            prompt_preview=prompt_preview,
+        )
+        return identity, unit_price, amount, balance_after
 
     def refund_user_balance(
         self,
@@ -260,7 +432,7 @@ FOR UPDATE
                 self._ensure_log_table(cur)
                 cur.execute(
                     """
-SELECT k.id AS key_id, k.user_id, u.email, u.balance
+SELECT k.id AS key_id, k.user_id, k.quota, k.quota_used, u.email, u.balance
 FROM api_keys k
 JOIN users u ON u.id = k.user_id
 WHERE k.key = %s AND k.deleted_at IS NULL
@@ -271,12 +443,24 @@ FOR UPDATE
                 row = cur.fetchone()
                 if not row:
                     raise Sub2APIBillingError("退款失败：sub2api API key 不存在")
-                balance = self._to_decimal(row["balance"])
-                next_balance = balance + amount
+                key_quota = self._to_decimal(row.get("quota"))
+                key_quota_used = self._to_decimal(row.get("quota_used"))
+                user_balance = self._to_decimal(row["balance"])
+                if key_quota > 0:
+                    balance = key_quota - key_quota_used
+                    next_balance = self._display_balance_after_refund(
+                        key_quota=key_quota,
+                        key_quota_used=key_quota_used,
+                        amount=amount,
+                    )
+                else:
+                    balance = user_balance
+                    next_balance = user_balance + amount
                 cur.execute(
                     "UPDATE users SET balance = %s, updated_at = now() WHERE id = %s",
-                    (str(next_balance), int(row["user_id"])),
+                    (str(user_balance + amount), int(row["user_id"])),
                 )
+                self._decrement_key_usage(cur, key_id=int(row["key_id"]), amount=amount)
                 self._log_event(
                     cur,
                     action="refund",
@@ -296,6 +480,7 @@ FOR UPDATE
                 )
             conn.commit()
         return next_balance
+
     def list_logs(
         self,
         *,
@@ -307,7 +492,7 @@ FOR UPDATE
         end_date: str = "",
     ) -> list[dict[str, Any]]:
         sql = [
-            "SELECT id, created_at, action, status, user_id, api_key_id, api_key, user_email, task_id, amount, balance_before, balance_after, mode, model, prompt_preview, error",
+            "SELECT id, created_at, action, status, user_id, api_key_id, api_key, user_email, task_id, amount, balance_before, balance_after, service, mode, model, prompt_preview, error",
             "FROM custom_image_billing_logs",
             "WHERE 1=1",
         ]

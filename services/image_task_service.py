@@ -55,39 +55,43 @@ def _token_value(identity: dict[str, object]) -> str:
 
 
 def _should_use_sub2api_balance(identity: dict[str, object]) -> bool:
-    return bool(config.sub2api_billing_enabled and identity.get("source") == "sub2api" and _token_value(identity))
+    return bool(config.sub2api_billing_enabled and "sub2api" in str(identity.get("source") or "") and _token_value(identity))
 
 
-def _image_price_decimal() -> Decimal:
-    return Decimal(str(config.image_price_per_request or 0))
-
-
-def _reserve_generation_credit(identity: dict[str, object], *, task_id: str, mode: str, model: str, prompt_preview: str) -> tuple[str, dict[str, Any]]:
+def _reserve_generation_credit(
+    identity: dict[str, object],
+    *,
+    task_id: str,
+    mode: str,
+    model: str,
+    size: str | None,
+    prompt_preview: str,
+) -> tuple[str, dict[str, Any]]:
     if identity.get("role") != "user":
         return "none", {}
+    if _should_use_sub2api_balance(identity):
+        token = _token_value(identity)
+        if not token:
+            raise ImageQuotaExceeded("图片生成额度已用完，且缺少 sub2api 计费凭证")
+        billing_identity, unit_price, charged_amount, balance_after = sub2api_billing_service.debit_image_balance(
+            raw_key=token,
+            image_count=1,
+            size=size,
+            task_id=task_id,
+            mode=mode,
+            model=model,
+            prompt_preview=prompt_preview,
+        )
+        if charged_amount <= 0 or unit_price <= 0:
+            raise ImageQuotaExceeded("图片生成额度已用完，且图片单价未配置")
+        return "balance", {
+            "charged_amount": str(charged_amount),
+            "balance_after": str(balance_after),
+            "sub2api_user_email": billing_identity.user_email,
+        }
     if auth_service.reserve_image_quota(identity, 1):
         return "quota", {}
-    if not _should_use_sub2api_balance(identity):
-        raise ImageQuotaExceeded("图片生成额度已用完，且该秘钥未接入 sub2api 余额扣费")
-    token = _token_value(identity)
-    if not token:
-        raise ImageQuotaExceeded("图片生成额度已用完，且缺少 sub2api 计费凭证")
-    price = _image_price_decimal()
-    if price <= 0:
-        raise ImageQuotaExceeded("图片生成额度已用完，且图片单价未配置")
-    billing_identity, balance_after = sub2api_billing_service.debit_user_balance(
-        raw_key=token,
-        amount=price,
-        task_id=task_id,
-        mode=mode,
-        model=model,
-        prompt_preview=prompt_preview,
-    )
-    return "balance", {
-        "charged_amount": str(price),
-        "balance_after": str(balance_after),
-        "sub2api_user_email": billing_identity.user_email,
-    }
+    raise ImageQuotaExceeded("图片生成额度已用完，且该秘钥未接入 sub2api 余额扣费")
 
 
 def _refund_generation_credit(task: dict[str, Any] | None) -> None:
@@ -284,6 +288,7 @@ class ImageTaskService:
                 task_id=task_id,
                 mode=mode,
                 model=_clean(payload.get("model"), "team-codex-gpt-image-2"),
+                size=_clean(payload.get("size")) or None,
                 prompt_preview=request_text(payload.get("prompt")),
             )
             quota_reserved = credit_mode == "quota"
