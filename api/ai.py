@@ -28,7 +28,7 @@ from services.sub2api_billing_service import Sub2APIBillingError, sub2api_billin
 
 class ImageGenerationRequest(BaseModel):
     prompt: str = Field(..., min_length=1)
-    model: str = "gpt-image-2"
+    model: str = "codex-gpt-image-2"
     n: int = Field(default=1, ge=1, le=4)
     size: str | None = None
     quality: str = "auto"

@@ -110,6 +110,8 @@ def split_image_model(model: object) -> tuple[str | None, str | None]:
     normalized = str(model or "").strip().lower()
     if not normalized:
         return None, None
+    if normalized == "gpt-image-2":
+        return None, CODEX_IMAGE_MODEL
     if normalized in BASE_IMAGE_MODELS:
         return None, normalized
     for plan_type in IMAGE_MODEL_PLAN_TYPES:
