@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from services.proxy_service import ClearanceBundle
@@ -42,6 +43,9 @@ class FakeProxySettings:
         self.session_kwargs_calls = []
         self.build_headers_calls = []
         self.refresh_calls = []
+
+    def get_profile(self, **kwargs):
+        return SimpleNamespace(clearance_enabled=True)
 
     def build_session_kwargs(self, **kwargs):
         self.session_kwargs_calls.append(kwargs)

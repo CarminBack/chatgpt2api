@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+import uuid
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
@@ -90,7 +91,7 @@ def _token_value(identity: dict[str, object]) -> str:
 
 
 def _should_bill_sub2api(identity: dict[str, object]) -> bool:
-    return bool("sub2api" in str(identity.get("source") or "") and _token_value(identity))
+    return bool(str(identity.get("source") or "") == "sub2api" and _token_value(identity))
 
 
 def _attach_image_owner(payload: dict[str, object], identity: dict[str, object]) -> None:
@@ -111,12 +112,13 @@ def create_router() -> APIRouter:
         token = _token_value(identity)
         mode = "edit" if call.endpoint.endswith("/edits") else "generate"
         model = _clean(payload.get("model"), call.model)
-        task_id = _clean(payload.get("client_task_id")) or f"{int(call.started * 1000)}-{mode}"
+        task_id = _clean(payload.get("client_task_id")) or f"{uuid.uuid4().hex}-{mode}"
         prompt_preview = request_text(payload.get("prompt"))
         charged_amount = Decimal("0")
+        billing_api_key_id = 0
         try:
             if _should_bill_sub2api(identity):
-                _, unit_price, charged_amount, _ = await run_in_threadpool(
+                billing_identity, unit_price, charged_amount, _ = await run_in_threadpool(
                     sub2api_billing_service.debit_image_balance,
                     raw_key=token,
                     image_count=image_count,
@@ -126,13 +128,14 @@ def create_router() -> APIRouter:
                     model=model,
                     prompt_preview=prompt_preview,
                 )
+                billing_api_key_id = billing_identity.key_id
                 if charged_amount <= 0 or unit_price <= 0:
                     raise Sub2APIBillingError("图片单价未配置")
             result = await call.run(handler, payload)
             if charged_amount > 0 and getattr(result, "status_code", 200) >= 400:
                 await run_in_threadpool(
                     sub2api_billing_service.refund_user_balance,
-                    raw_key=token,
+                    api_key_id=billing_api_key_id,
                     amount=charged_amount,
                     task_id=task_id,
                     mode=mode,
@@ -147,7 +150,7 @@ def create_router() -> APIRouter:
             if charged_amount > 0:
                 await run_in_threadpool(
                     sub2api_billing_service.refund_user_balance,
-                    raw_key=token,
+                    api_key_id=billing_api_key_id,
                     amount=charged_amount,
                     task_id=task_id,
                     mode=mode,

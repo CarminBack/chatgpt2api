@@ -1,6 +1,6 @@
 # Codex Image3 Custom Maintenance Guide
 
-Last updated: 2026-07-09
+Last updated: 2026-07-16
 
 This document is the source of truth for the `image3.mewinyou.shop` custom build. If Codex receives only this document and repository access, it should understand what the custom behavior is, where it lives, how to update it, and how to verify it.
 
@@ -8,6 +8,7 @@ This document is the source of truth for the `image3.mewinyou.shop` custom build
 
 - GitHub fork: `git@github.com:CarminBack/chatgpt2api.git`
 - Current custom branch: `main`
+- Current custom version: `1.7.0-image3.1`
 - Image3 custom code baseline before this document was added: `e8c993c`
 - Old image2 version backup branch: `image2-before-image3-custom`
 - Existing older feature branch, not modified during image3 upload: `feature/sub2api-image-billing`
@@ -87,7 +88,13 @@ Authentication:
 
 - Local legacy admin key still works.
 - Local image3 user keys still work if configured.
-- If a Bearer token is not local and `sub2api_billing_enabled=true`, image3 validates it against token2/sub2api `api_keys`.
+- Local identities are returned before token2 validation, so a token2 database
+  outage does not block local admin or local user access.
+- If a Bearer token is not local and `sub2api_billing_enabled=true`, image3
+  validates it against token2/sub2api `api_keys`.
+- If token2 validation cannot reach PostgreSQL, unknown Bearer keys receive
+  HTTP `503`; connection attempts time out after five seconds, while invalid or
+  non-whitelisted keys still receive `401`.
 - Non-whitelisted token2 groups are rejected during authentication.
 - Current whitelist is `group_id=12`.
 - The image3 login page accepts one-shot URL auto-login through
@@ -143,6 +150,14 @@ Billing:
 - Billing happens before sending the image request upstream.
 - If upstream returns an error or the task fails, billing is refunded.
 - Duplicate image task submission with the same `client_task_id` returns the existing task and does not double charge.
+- Async image tasks persist only the billing API key ID, amount, and refund
+  state; raw API keys are never written to `image_tasks.json`.
+- On service restart, unfinished billed tasks are marked interrupted and a
+  background recovery worker retries their pending refunds without blocking
+  application startup.
+- Refunds match the original successful debit by service, API key ID, task ID,
+  and amount. The original debit's `refunded_at` marker makes repeated refund
+  attempts idempotent.
 - `image_1k_only_sub2api_user_ids` and `image_1k_only_sub2api_key_ids`
   can restrict selected token2 users or keys to 1K output only. Requests whose
   parsed max `size` side is greater than 1024 are scaled proportionally so the
@@ -189,6 +204,10 @@ Balance and usage updates:
 - Refunds add money back to `users.balance` and decrement usage counters,
   clamped at zero.
 - Writes all debit/refund events to `custom_image_billing_logs`.
+- The `api_key` ledger column is retained for schema compatibility but always
+  contains `[redacted]`; schema initialization also redacts historical values.
+- Failed debits are committed to the ledger before the billing error is
+  returned to the caller.
 - `custom_image_billing_logs.service` records which service wrote the row:
   `image3` for port 4003/image3, `chatgpt2api` for port 4001, and `legacy`
   for historical rows created before this column existed. The image3 `/billing`
@@ -218,7 +237,7 @@ Required tables and columns:
 
 ```text
 custom_image_billing_logs:
-  service
+  service, refunded_at
 
 api_keys:
   id, user_id, key, group_id, status, deleted_at,
@@ -241,6 +260,7 @@ user_group_rate_multipliers:
 
 custom_image_billing_logs:
   created automatically by image3 if missing
+  api_key is always [redacted]
 ```
 
 If token2 GitHub updates include DB migrations touching these tables, test image3 billing before deploying token2 production.
@@ -274,6 +294,7 @@ Primary custom files:
   - direct image generation/edit billing wrapper
 - `services/image_task_service.py`
   - async image task billing/refund
+  - persists non-secret refund metadata and retries pending refunds after restart
   - attaches image owner metadata for task-generated images
 - `services/image_access_policy.py`
   - token2 user/key 1K-only image size constraint
@@ -308,6 +329,8 @@ Keep future custom logic concentrated in `services/sub2api_billing_service.py` w
 ## Error Semantics
 
 - Invalid or non-whitelisted token2 key should return `401` through the normal auth path.
+- A token2 database/network failure for an otherwise unknown key should return
+  `503`; local identities must continue to authenticate without a token2 query.
 - Billing failure after authentication, such as insufficient user balance, insufficient key quota, or disabled image generation group, should return `402`.
 - Upstream image failure after successful debit should trigger refund.
 
@@ -327,6 +350,9 @@ The workflow `.github/workflows/docker-publish.yml` publishes:
 
 - `ghcr.io/carminback/chatgpt2api-image3:latest`
 - branch, tag, sha, and semver tags when applicable
+
+The repository default `docker-compose.yml`, README, and deployment guide must
+also reference this image rather than the Basketikun upstream package.
 
 Switch image3 compose to the GHCR image:
 
@@ -357,6 +383,25 @@ Compile:
 
 ```bash
 python3 -m compileall api services
+```
+
+Focused regression tests:
+
+```bash
+uv run pytest -q \
+  test/test_support_auth.py \
+  test/test_sub2api_billing_service.py \
+  test/test_image_billing_api.py \
+  test/test_image_task_service.py \
+  test/test_image_tasks_api.py \
+  test/test_register_proxy_runtime.py
+```
+
+Initialize or migrate the billing ledger after backing up token2 PostgreSQL:
+
+```bash
+sudo docker exec chatgpt2api-image3 sh -lc \
+  'cd /app && uv run python -c "from services.sub2api_billing_service import sub2api_billing_service; sub2api_billing_service.list_logs(limit=1)"'
 ```
 
 Check runtime config inside container:
@@ -509,6 +554,7 @@ If the document and code disagree, treat the code as temporarily authoritative, 
 - Never commit real `sub2api_billing_dsn`.
 - Never commit real token2 keys.
 - Never commit production admin keys.
-- Before changing token2/sub2api itself, back up `sub2api-postgres`.
+- Before changing token2/sub2api itself or applying an image3 billing schema
+  migration, back up `sub2api-postgres`.
 - If token2 updates with database migrations, verify schema compatibility before deploying production token2.
 - Keep image2 production separate; image3 custom work must not modify image2 unless explicitly requested.

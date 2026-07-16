@@ -11,6 +11,7 @@ from psycopg2.extras import RealDictCursor
 from services.config import config
 
 SERVICE_NAME = "image3"
+REDACTED_API_KEY = "[redacted]"
 
 
 class Sub2APIBillingError(Exception):
@@ -47,7 +48,7 @@ class Sub2APIBillingService:
         return dsn
 
     def _connect(self):
-        return psycopg2.connect(self._get_dsn(), cursor_factory=RealDictCursor)
+        return psycopg2.connect(self._get_dsn(), cursor_factory=RealDictCursor, connect_timeout=5)
 
     @staticmethod
     def _ensure_log_table(cur) -> None:
@@ -66,6 +67,7 @@ CREATE TABLE IF NOT EXISTS custom_image_billing_logs (
   amount NUMERIC(20,8) NOT NULL DEFAULT 0,
   balance_before NUMERIC(20,8) NOT NULL DEFAULT 0,
   balance_after NUMERIC(20,8) NOT NULL DEFAULT 0,
+  refunded_at TIMESTAMPTZ,
   service TEXT NOT NULL DEFAULT 'image3',
   mode TEXT NOT NULL DEFAULT '',
   model TEXT NOT NULL DEFAULT '',
@@ -75,6 +77,27 @@ CREATE TABLE IF NOT EXISTS custom_image_billing_logs (
 """
         )
         cur.execute("ALTER TABLE custom_image_billing_logs ADD COLUMN IF NOT EXISTS service TEXT NOT NULL DEFAULT 'legacy'")
+        cur.execute("ALTER TABLE custom_image_billing_logs ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMPTZ")
+        cur.execute(
+            "UPDATE custom_image_billing_logs SET api_key = %s WHERE api_key IS DISTINCT FROM %s",
+            (REDACTED_API_KEY, REDACTED_API_KEY),
+        )
+        cur.execute(
+            """
+UPDATE custom_image_billing_logs AS debit
+SET refunded_at = refund.created_at
+FROM custom_image_billing_logs AS refund
+WHERE debit.refunded_at IS NULL
+  AND debit.service = refund.service
+  AND debit.api_key_id = refund.api_key_id
+  AND debit.task_id = refund.task_id
+  AND debit.amount = refund.amount
+  AND debit.action = 'debit'
+  AND debit.status = 'success'
+  AND refund.action = 'refund'
+  AND refund.status = 'success'
+"""
+        )
 
     @staticmethod
     def _log_event(
@@ -84,7 +107,6 @@ CREATE TABLE IF NOT EXISTS custom_image_billing_logs (
         status: str,
         user_id: int,
         api_key_id: int,
-        api_key: str,
         user_email: str,
         task_id: str = "",
         amount: Decimal | str | float | int = Decimal("0"),
@@ -107,7 +129,7 @@ INSERT INTO custom_image_billing_logs (
                 status,
                 user_id,
                 api_key_id,
-                api_key,
+                REDACTED_API_KEY,
                 user_email,
                 task_id,
                 str(amount),
@@ -337,6 +359,7 @@ WHERE id = %s
         if amount <= 0:
             raise Sub2APIBillingError("扣费金额必须大于 0")
         key = str(raw_key or "").strip()
+        failure_error = ""
         with self._connect() as conn:
             with conn.cursor() as cur:
                 self._ensure_log_table(cur)
@@ -353,7 +376,6 @@ WHERE id = %s
                         status="failed",
                         user_id=identity.user_id,
                         api_key_id=identity.key_id,
-                        api_key=key,
                         user_email=identity.user_email,
                         task_id=task_id,
                         amount=amount,
@@ -364,31 +386,34 @@ WHERE id = %s
                         prompt_preview=prompt_preview,
                         error=insufficient_error,
                     )
-                    raise Sub2APIBillingError(insufficient_error)
-                next_balance = balance_before - amount
-                user_balance_after = self._to_decimal(identity.balance) - amount
-                cur.execute(
-                    "UPDATE users SET balance = %s, updated_at = now() WHERE id = %s",
-                    (str(user_balance_after), identity.user_id),
-                )
-                self._increment_key_usage(cur, key_id=identity.key_id, amount=amount)
-                self._log_event(
-                    cur,
-                    action="debit",
-                    status="success",
-                    user_id=identity.user_id,
-                    api_key_id=identity.key_id,
-                    api_key=key,
-                    user_email=identity.user_email,
-                    task_id=task_id,
-                    amount=amount,
-                    balance_before=balance_before,
-                    balance_after=next_balance,
-                    mode=mode,
-                    model=model,
-                    prompt_preview=prompt_preview,
-                )
+                    failure_error = insufficient_error
+                    next_balance = balance_before
+                else:
+                    next_balance = balance_before - amount
+                    user_balance_after = self._to_decimal(identity.balance) - amount
+                    cur.execute(
+                        "UPDATE users SET balance = %s, updated_at = now() WHERE id = %s",
+                        (str(user_balance_after), identity.user_id),
+                    )
+                    self._increment_key_usage(cur, key_id=identity.key_id, amount=amount)
+                    self._log_event(
+                        cur,
+                        action="debit",
+                        status="success",
+                        user_id=identity.user_id,
+                        api_key_id=identity.key_id,
+                        user_email=identity.user_email,
+                        task_id=task_id,
+                        amount=amount,
+                        balance_before=balance_before,
+                        balance_after=next_balance,
+                        mode=mode,
+                        model=model,
+                        prompt_preview=prompt_preview,
+                    )
             conn.commit()
+        if failure_error:
+            raise Sub2APIBillingError(failure_error)
         return identity, next_balance
 
     def debit_image_balance(
@@ -416,7 +441,7 @@ WHERE id = %s
     def refund_user_balance(
         self,
         *,
-        raw_key: str,
+        api_key_id: int,
         amount: Decimal,
         task_id: str = "",
         mode: str = "",
@@ -427,26 +452,74 @@ WHERE id = %s
         amount = self._to_decimal(amount)
         if amount <= 0:
             return Decimal("0")
-        key = str(raw_key or "").strip()
+        key_id = int(api_key_id or 0)
+        if key_id <= 0:
+            raise Sub2APIBillingError("退款失败：sub2api API key ID 无效")
+        task_id = str(task_id or "").strip()
+        if not task_id:
+            raise Sub2APIBillingError("退款失败：task_id 不能为空")
         with self._connect() as conn:
             with conn.cursor() as cur:
                 self._ensure_log_table(cur)
                 cur.execute(
                     """
-SELECT k.id AS key_id, k.user_id, k.quota, k.quota_used, u.email, u.balance
+SELECT k.id AS key_id, k.user_id, k.quota, k.quota_used, u.email AS user_email, u.balance
 FROM api_keys k
 JOIN users u ON u.id = k.user_id
-WHERE k.key = %s AND k.deleted_at IS NULL
-FOR UPDATE
+WHERE k.id = %s
+FOR UPDATE OF k, u
 """,
-                    (key,),
+                    (key_id,),
                 )
                 row = cur.fetchone()
                 if not row:
                     raise Sub2APIBillingError("退款失败：sub2api API key 不存在")
+                cur.execute(
+                    """
+SELECT id
+FROM custom_image_billing_logs
+WHERE service = %s
+  AND api_key_id = %s
+  AND task_id = %s
+  AND amount = %s
+  AND action = 'debit'
+  AND status = 'success'
+  AND refunded_at IS NULL
+ORDER BY id DESC
+LIMIT 1
+FOR UPDATE
+""",
+                    (SERVICE_NAME, key_id, task_id, str(amount)),
+                )
+                debit_row = cur.fetchone()
                 key_quota = self._to_decimal(row.get("quota"))
                 key_quota_used = self._to_decimal(row.get("quota_used"))
                 user_balance = self._to_decimal(row["balance"])
+                if not debit_row:
+                    cur.execute(
+                        """
+SELECT id
+FROM custom_image_billing_logs
+WHERE service = %s
+  AND api_key_id = %s
+  AND task_id = %s
+  AND amount = %s
+  AND action = 'refund'
+  AND status = 'success'
+ORDER BY id DESC
+LIMIT 1
+""",
+                        (SERVICE_NAME, key_id, task_id, str(amount)),
+                    )
+                    if cur.fetchone():
+                        current_balance = (
+                            key_quota - key_quota_used
+                            if key_quota > 0
+                            else user_balance
+                        )
+                        conn.commit()
+                        return current_balance
+                    raise Sub2APIBillingError("退款失败：找不到对应的未退款扣费记录")
                 if key_quota > 0:
                     balance = key_quota - key_quota_used
                     next_balance = self._display_balance_after_refund(
@@ -458,6 +531,10 @@ FOR UPDATE
                     balance = user_balance
                     next_balance = user_balance + amount
                 cur.execute(
+                    "UPDATE custom_image_billing_logs SET refunded_at = now() WHERE id = %s",
+                    (int(debit_row["id"]),),
+                )
+                cur.execute(
                     "UPDATE users SET balance = %s, updated_at = now() WHERE id = %s",
                     (str(user_balance + amount), int(row["user_id"])),
                 )
@@ -468,8 +545,7 @@ FOR UPDATE
                     status="success",
                     user_id=int(row["user_id"]),
                     api_key_id=int(row["key_id"]),
-                    api_key=key,
-                    user_email=str(row["email"] or "").strip(),
+                    user_email=str(row["user_email"] or "").strip(),
                     task_id=task_id,
                     amount=amount,
                     balance_before=balance,

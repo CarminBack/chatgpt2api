@@ -128,6 +128,17 @@ function normalizeThirdPartyApps(value: unknown): ThirdPartyAppsSettings {
   };
 }
 
+function registerValidationError(config: RegisterConfig): string {
+  const invalidCloudMailProvider = (config.mail.providers || []).find((provider) => {
+    if (provider.type !== "cloudmail_gen" || provider.enable === false) return false;
+    const domains = Array.isArray(provider.domain)
+      ? provider.domain
+      : String(provider.domain || "").split(/[\n,]/);
+    return !domains.some((domain) => String(domain || "").trim());
+  });
+  return invalidCloudMailProvider ? "CloudMailGen 邮箱域名不能为空，请至少填写一个域名" : "";
+}
+
 function normalizeIdList(value: unknown): number[] {
   const items = Array.isArray(value)
     ? value
@@ -1015,6 +1026,11 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   saveRegister: async () => {
     const { registerConfig } = get();
     if (!registerConfig) return;
+    const validationError = registerValidationError(registerConfig);
+    if (validationError) {
+      toast.error(validationError);
+      return;
+    }
     try {
       set({ isSavingRegister: true });
       const data = await updateRegisterConfig({
@@ -1039,6 +1055,11 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   toggleRegister: async () => {
     const { registerConfig } = get();
     if (!registerConfig) return;
+    const validationError = registerConfig.enabled ? "" : registerValidationError(registerConfig);
+    if (validationError) {
+      toast.error(validationError);
+      return;
+    }
     set({ isSavingRegister: true });
     try {
       if (!registerConfig.enabled) {

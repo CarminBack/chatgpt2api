@@ -5,7 +5,7 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +15,7 @@ from services.image_access_policy import constrain_image_size
 from services.log_service import LOG_TYPE_CALL, log_service
 from services.protocol import openai_v1_image_edit, openai_v1_image_generations
 from services.sub2api_billing_service import sub2api_billing_service
+from utils.log import logger
 
 TASK_STATUS_QUEUED = "queued"
 TASK_STATUS_RUNNING = "running"
@@ -22,6 +23,8 @@ TASK_STATUS_SUCCESS = "success"
 TASK_STATUS_ERROR = "error"
 TERMINAL_STATUSES = {TASK_STATUS_SUCCESS, TASK_STATUS_ERROR}
 UNFINISHED_STATUSES = {TASK_STATUS_QUEUED, TASK_STATUS_RUNNING}
+REFUND_FAILURE_SUFFIX = "；自动退款失败，将在服务重启时重试"
+REFUND_SUCCESS_SUFFIX = "，扣费已自动退回"
 
 
 def _now_iso() -> str:
@@ -55,11 +58,19 @@ def _token_value(identity: dict[str, object]) -> str:
 
 
 def _should_bill_sub2api(identity: dict[str, object]) -> bool:
-    return bool("sub2api" in str(identity.get("source") or "") and _token_value(identity))
+    return bool(str(identity.get("source") or "") == "sub2api" and _token_value(identity))
 
 
 def _task_key(owner_id: str, task_id: str) -> str:
     return f"{owner_id}:{task_id}"
+
+
+def _without_refund_suffix(value: object) -> str:
+    text = _clean(value)
+    for suffix in (REFUND_FAILURE_SUFFIX, REFUND_SUCCESS_SUFFIX):
+        if text.endswith(suffix):
+            return text[:-len(suffix)]
+    return text
 
 
 def _collect_image_urls(data: list[Any]) -> list[str]:
@@ -129,6 +140,13 @@ class ImageTaskService:
             changed = self._cleanup_locked() or changed
             if changed:
                 self._save_locked()
+            has_pending_refunds = any(task.get("billing_refund_pending") for task in self._tasks.values())
+        if has_pending_refunds:
+            threading.Thread(
+                target=self._recover_pending_refunds,
+                name="image-task-refund-recovery",
+                daemon=True,
+            ).start()
 
     def submit_generation(
         self,
@@ -222,7 +240,7 @@ class ImageTaskService:
         owner = _owner_id(identity)
         key = _task_key(owner, task_id)
         billing_amount = Decimal("0")
-        billing_token = ""
+        billing_api_key_id = 0
         now = _now_iso()
         should_start = False
         with self._lock:
@@ -233,9 +251,8 @@ class ImageTaskService:
                     self._save_locked()
                 return _public_task(task)
             if _should_bill_sub2api(identity):
-                billing_token = _token_value(identity)
-                _, _, billing_amount, _ = sub2api_billing_service.debit_image_balance(
-                    raw_key=billing_token,
+                billing_identity, _, billing_amount, _ = sub2api_billing_service.debit_image_balance(
+                    raw_key=_token_value(identity),
                     image_count=int(payload.get("n") or 1),
                     size=_clean(payload.get("size")) or None,
                     task_id=task_id,
@@ -243,6 +260,7 @@ class ImageTaskService:
                     model=_clean(payload.get("model"), "codex-gpt-image-2"),
                     prompt_preview=request_text(payload.get("prompt")),
                 )
+                billing_api_key_id = billing_identity.key_id
             task = {
                 "id": task_id,
                 "owner_id": owner,
@@ -255,8 +273,36 @@ class ImageTaskService:
                 "updated_at": now,
                 "created_ts": time.time(),
             }
+            if billing_api_key_id and billing_amount > 0:
+                task.update({
+                    "billing_api_key_id": billing_api_key_id,
+                    "billing_amount": str(billing_amount),
+                    "billing_refund_pending": True,
+                    "billing_refunded": False,
+                })
             self._tasks[key] = task
-            self._save_locked()
+            try:
+                self._save_locked()
+            except Exception:
+                self._tasks.pop(key, None)
+                if billing_api_key_id and billing_amount > 0:
+                    try:
+                        sub2api_billing_service.refund_user_balance(
+                            api_key_id=billing_api_key_id,
+                            amount=billing_amount,
+                            task_id=task_id,
+                            mode=mode,
+                            model=_clean(payload.get("model"), "codex-gpt-image-2"),
+                            prompt_preview=request_text(payload.get("prompt")),
+                            error="图片任务持久化失败，自动退款",
+                        )
+                    except Exception as refund_exc:
+                        logger.error({
+                            "event": "image_task_persist_refund_failed",
+                            "task_id": task_id,
+                            "error_type": type(refund_exc).__name__,
+                        })
+                raise
             should_start = True
 
         if should_start:
@@ -268,13 +314,19 @@ class ImageTaskService:
                     payload,
                     dict(identity),
                     _clean(payload.get("model"), "codex-gpt-image-2"),
-                    billing_token,
-                    billing_amount,
                 ),
                 name=f"image-task-{task_id[:16]}",
                 daemon=True,
             )
-            thread.start()
+            try:
+                thread.start()
+            except Exception as exc:
+                error_message = str(exc) or "图片任务线程启动失败"
+                refunded = self._refund_task_billing(key, error_message)
+                if not refunded:
+                    error_message = f"{error_message}；自动退款失败，将在服务重启时重试"
+                self._update_task(key, status=TASK_STATUS_ERROR, error=error_message, data=[])
+                raise
         return _public_task(task)
 
     def _run_task(
@@ -284,8 +336,6 @@ class ImageTaskService:
         payload: dict[str, Any],
         identity: dict[str, object],
         model: str,
-        billing_token: str = "",
-        billing_amount: Decimal = Decimal("0"),
     ) -> None:
         started = time.time()
         self._update_task(key, status=TASK_STATUS_RUNNING, error="")
@@ -315,7 +365,16 @@ class ImageTaskService:
                 raise error
             usage = result.get("usage")
             duration_ms = int((time.time() - started) * 1000)
-            self._update_task(key, status=TASK_STATUS_SUCCESS, data=data, usage=usage, error="", duration_ms=duration_ms)
+            self._update_task(
+                key,
+                status=TASK_STATUS_SUCCESS,
+                data=data,
+                usage=usage,
+                error="",
+                duration_ms=duration_ms,
+                billing_refund_pending=False,
+                billing_refund_error="",
+            )
             self._log_call(
                 identity,
                 mode,
@@ -330,19 +389,9 @@ class ImageTaskService:
             error_message = str(exc) or "image task failed"
             account_email = _clean(getattr(exc, "account_email", ""))
             conversation_id = _clean(getattr(exc, "conversation_id", ""))
-            if billing_token and billing_amount > 0:
-                try:
-                    sub2api_billing_service.refund_user_balance(
-                        raw_key=billing_token,
-                        amount=billing_amount,
-                        task_id=_clean(payload.get("client_task_id")) or _clean(self._tasks.get(key, {}).get("id")),
-                        mode=mode,
-                        model=model,
-                        prompt_preview=request_text(payload.get("prompt")),
-                        error=error_message,
-                    )
-                except Exception:
-                    pass
+            refunded = self._refund_task_billing(key, error_message)
+            if not refunded:
+                error_message = f"{error_message}；自动退款失败，将在服务重启时重试"
             duration_ms = int((time.time() - started) * 1000)
             self._update_task(key, status=TASK_STATUS_ERROR, error=error_message, data=[],
                               duration_ms=duration_ms,
@@ -404,10 +453,16 @@ class ImageTaskService:
             task = self._tasks.get(key)
             if task is None:
                 return
+            previous = dict(task)
             task.update(updates)
             task["updated_at"] = _now_iso()
             task["updated_ts"] = time.time()
-            self._save_locked()
+            try:
+                self._save_locked()
+            except Exception:
+                task.clear()
+                task.update(previous)
+                raise
 
     def _load_locked(self) -> dict[str, dict[str, Any]]:
         if not self.path.exists():
@@ -445,6 +500,20 @@ class ImageTaskService:
                 "started_ts": item.get("started_ts"),
                 "duration_ms": item.get("duration_ms"),
             }
+            try:
+                billing_api_key_id = int(item.get("billing_api_key_id") or 0)
+                billing_amount = Decimal(str(item.get("billing_amount") or "0"))
+            except (TypeError, ValueError, InvalidOperation):
+                billing_api_key_id = 0
+                billing_amount = Decimal("0")
+            if billing_api_key_id > 0 and billing_amount > 0:
+                task.update({
+                    "billing_api_key_id": billing_api_key_id,
+                    "billing_amount": str(billing_amount),
+                    "billing_refund_pending": bool(item.get("billing_refund_pending")),
+                    "billing_refunded": bool(item.get("billing_refunded")),
+                    "billing_refund_error": _clean(item.get("billing_refund_error")),
+                })
             data = item.get("data")
             if isinstance(data, list):
                 task["data"] = data
@@ -473,6 +542,54 @@ class ImageTaskService:
                 changed = True
         return changed
 
+    def _refund_task_billing(self, key: str, error: str) -> bool:
+        with self._lock:
+            task = dict(self._tasks.get(key) or {})
+        if not task.get("billing_refund_pending"):
+            return True
+        try:
+            api_key_id = int(task.get("billing_api_key_id") or 0)
+            amount = Decimal(str(task.get("billing_amount") or "0"))
+            sub2api_billing_service.refund_user_balance(
+                api_key_id=api_key_id,
+                amount=amount,
+                task_id=_clean(task.get("id")),
+                mode=_clean(task.get("mode"), "generate"),
+                model=_clean(task.get("model"), "codex-gpt-image-2"),
+                prompt_preview="",
+                error=error,
+            )
+        except Exception as exc:
+            logger.error({
+                "event": "image_task_refund_failed",
+                "task_id": _clean(task.get("id")),
+                "error_type": type(exc).__name__,
+            })
+            self._update_task(
+                key,
+                billing_refund_error="自动退款失败，将在服务重启时重试",
+            )
+            return False
+        self._update_task(
+            key,
+            billing_refund_pending=False,
+            billing_refunded=True,
+            billing_refund_error="",
+        )
+        return True
+
+    def _recover_pending_refunds(self) -> None:
+        with self._lock:
+            keys = [key for key, task in self._tasks.items() if task.get("billing_refund_pending")]
+        for key in keys:
+            with self._lock:
+                task = dict(self._tasks.get(key) or {})
+            error_message = _without_refund_suffix(task.get("error")) or "服务重启，未完成的图片任务已中断"
+            if self._refund_task_billing(key, error_message):
+                self._update_task(key, error=f"{error_message}{REFUND_SUCCESS_SUFFIX}")
+            else:
+                self._update_task(key, error=f"{error_message}{REFUND_FAILURE_SUFFIX}")
+
     def _cleanup_locked(self) -> bool:
         try:
             retention_days = max(1, int(self.retention_days_getter()))
@@ -482,7 +599,9 @@ class ImageTaskService:
         removed_keys = [
             key
             for key, task in self._tasks.items()
-            if task.get("status") in TERMINAL_STATUSES and _timestamp(task.get("updated_at")) < cutoff
+            if task.get("status") in TERMINAL_STATUSES
+            and not task.get("billing_refund_pending")
+            and _timestamp(task.get("updated_at")) < cutoff
         ]
         for key in removed_keys:
             self._tasks.pop(key, None)

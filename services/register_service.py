@@ -75,6 +75,20 @@ def _normalize(raw: dict) -> dict:
     return cfg
 
 
+def _validate_mail_config(config: dict) -> None:
+    mail = config.get("mail") if isinstance(config.get("mail"), dict) else {}
+    providers = mail.get("providers") if isinstance(mail.get("providers"), list) else []
+    for provider in providers:
+        if not isinstance(provider, dict):
+            continue
+        if provider.get("type") != "cloudmail_gen" or provider.get("enable") is False:
+            continue
+        raw_domains = provider.get("domain")
+        domains = raw_domains if isinstance(raw_domains, list) else str(raw_domains or "").replace(",", "\n").splitlines()
+        if not any(str(domain or "").strip() for domain in domains):
+            raise ValueError("CloudMailGen 邮箱域名不能为空，请至少填写一个域名")
+
+
 class RegisterService:
     def __init__(self, store_file: Path):
         self._store_file = store_file
@@ -178,7 +192,9 @@ class RegisterService:
     def update(self, updates: dict) -> dict:
         with self._lock:
             self._merge_outlook_pools(updates)
-            self._config = _normalize({**self._config, **updates})
+            next_config = _normalize({**self._config, **updates})
+            _validate_mail_config(next_config)
+            self._config = next_config
             self._drop_mail_proxy()
             openai_register.config.update({k: self._config[k] for k in ("mail", "proxy", "total", "threads")})
             self._save()
@@ -190,6 +206,7 @@ class RegisterService:
                 self._config["enabled"] = True
                 self._save()
                 return self.get()
+            _validate_mail_config(self._config)
             self._config["enabled"] = True
             self._drop_mail_proxy()
             self._logs = []

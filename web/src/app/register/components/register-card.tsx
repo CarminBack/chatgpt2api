@@ -166,6 +166,7 @@ export function RegisterCard() {
                 const type = String(provider.type || "tempmail_lol");
                 const domains = Array.isArray(provider.domain) ? provider.domain.map(String).join("\n") : "";
                 const subdomains = Array.isArray(provider.subdomain) ? provider.subdomain.map(String).join("\n") : "";
+                const domainFieldId = `register-provider-${index}-domains`;
                 return (
                   <div key={index} className="space-y-3 border-t border-stone-200 pt-3 first:border-t-0 first:pt-0">
                     <div className="flex items-center justify-between gap-3">
@@ -341,8 +342,9 @@ export function RegisterCard() {
 
                     {type === "cloudmail_gen" || type === "tempmail_lol" || type === "cloudflare_temp_email" || type === "moemail" || type === "inbucket" || type === "yyds_mail" || type === "ddg_mail" ? (
                       <div className="space-y-2">
-                        <label className="text-sm text-stone-700">{type === "cloudmail_gen" ? "邮箱域名" : type === "inbucket" ? "基础域名列表" : "Domain"}</label>
-                        <Textarea value={domains} onChange={(event) => updateProvider(index, { domain: event.target.value.split(/[\n,]/).map((item) => item.trim()) })} placeholder={type === "cloudmail_gen" ? "每行一个域名，留空则使用服务默认域名" : type === "inbucket" ? "每行一个基础域名，系统会自动生成随机子域名" : type === "moemail" ? "每行一个域名" : "每行一个域名，留空则使用服务默认域名"} className="min-h-20 rounded-xl border-stone-200 bg-white font-mono text-xs" disabled={config.enabled} />
+                        <label htmlFor={domainFieldId} className="text-sm text-stone-700">{type === "cloudmail_gen" ? "邮箱域名（必填）" : type === "inbucket" ? "基础域名列表" : "Domain"}</label>
+                        <Textarea id={domainFieldId} required={type === "cloudmail_gen"} aria-required={type === "cloudmail_gen"} value={domains} onChange={(event) => updateProvider(index, { domain: event.target.value.split(/[\n,]/).map((item) => item.trim()) })} placeholder={type === "cloudmail_gen" ? "每行一个域名" : type === "inbucket" ? "每行一个基础域名，系统会自动生成随机子域名" : type === "moemail" ? "每行一个域名" : "每行一个域名，留空则使用服务默认域名"} className="min-h-20 rounded-xl border-stone-200 bg-white font-mono text-xs" disabled={config.enabled} />
+                        {type === "cloudmail_gen" ? <p className="text-xs leading-5 text-stone-500">CloudMailGen 必须至少配置一个可用邮箱域名。</p> : null}
                       </div>
                     ) : null}
                     {type === "cloudmail_gen" ? (
