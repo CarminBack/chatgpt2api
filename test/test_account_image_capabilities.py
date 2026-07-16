@@ -13,7 +13,7 @@ from services.auth_service import AuthService
 from services.config import config
 from services.openai_backend_api import InvalidAccessTokenError
 from services.storage.json_storage import JSONStorageBackend
-from utils.helper import anonymize_token, split_image_model
+from utils.helper import anonymize_token, is_codex_image_model, split_image_model
 
 
 class AccountCapabilityTests(unittest.TestCase):
@@ -70,12 +70,14 @@ class AccountCapabilityTests(unittest.TestCase):
             self.assertTrue(updated["image_quota_unknown"])
 
     def test_split_image_model_supports_plan_type_prefix(self) -> None:
-        self.assertEqual(split_image_model("gpt-image-2"), (None, "codex-gpt-image-2"))
+        self.assertEqual(split_image_model("gpt-image-2"), (None, "gpt-image-2"))
         self.assertEqual(split_image_model("plus-codex-gpt-image-2"), ("plus", "codex-gpt-image-2"))
         self.assertEqual(split_image_model("team-codex-gpt-image-2"), ("team", "codex-gpt-image-2"))
         self.assertEqual(split_image_model("pro-codex-gpt-image-2"), ("pro", "codex-gpt-image-2"))
         self.assertEqual(split_image_model("plus-gpt-image-2"), (None, None))
         self.assertEqual(split_image_model("unknown-image-model"), (None, None))
+        self.assertFalse(is_codex_image_model("gpt-image-2"))
+        self.assertTrue(is_codex_image_model("codex-gpt-image-2"))
 
     def test_get_available_access_token_filters_by_plan_type(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

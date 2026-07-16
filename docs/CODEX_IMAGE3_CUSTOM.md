@@ -8,7 +8,7 @@ This document is the source of truth for the `image3.mewinyou.shop` custom build
 
 - GitHub fork: `git@github.com:CarminBack/chatgpt2api.git`
 - Current custom branch: `main`
-- Current custom version: `1.7.0-image3.1`
+- Current custom version: `1.7.0-image3.2`
 - Image3 custom code baseline before this document was added: `e8c993c`
 - Old image2 version backup branch: `image2-before-image3-custom`
 - Existing older feature branch, not modified during image3 upload: `feature/sub2api-image-billing`
@@ -110,12 +110,11 @@ Third-party apps:
 
 Image model compatibility:
 
-- `gpt-image-2` is kept as a public compatibility model name, but image3 maps it
-  internally to `codex-gpt-image-2` to avoid the unstable ChatGPT web image
-  generation path.
-- Explicit client requests with `"model": "gpt-image-2"` therefore require an
-  available Codex-source image account, the same as direct
-  `codex-gpt-image-2` requests.
+- `gpt-image-2` uses the ChatGPT web image generation path and is the default
+  for requests that omit `model`.
+- `codex-gpt-image-2` uses the Codex responses image tool and remains available
+  as an explicit model. Use it for 2K/4K requests because the web image path
+  does not reliably honor requested pixel dimensions.
 
 Token2 image entry:
 
@@ -163,9 +162,8 @@ Billing:
   parsed max `size` side is greater than 1024 are scaled proportionally so the
   largest side is 1024 before billing and before upstream image generation.
   Missing, empty, or `auto` size is treated as 1K and left unchanged.
-- Default image generation/edit model is `codex-gpt-image-2` so omitted-model
-  requests and the web UI avoid the older ChatGPT web `gpt-image-2` path when
-  it does not trigger the upstream image tool.
+- Default image generation/edit model is `gpt-image-2` for the API, async task
+  endpoints, and web UI.
 
 Price formula:
 
