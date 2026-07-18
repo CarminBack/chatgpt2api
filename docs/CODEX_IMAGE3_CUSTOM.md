@@ -1,6 +1,6 @@
 # Codex Image3 Custom Maintenance Guide
 
-Last updated: 2026-07-16
+Last updated: 2026-07-18
 
 This document is the source of truth for the `image3.mewinyou.shop` custom build. If Codex receives only this document and repository access, it should understand what the custom behavior is, where it lives, how to update it, and how to verify it.
 
@@ -8,7 +8,7 @@ This document is the source of truth for the `image3.mewinyou.shop` custom build
 
 - GitHub fork: `git@github.com:CarminBack/chatgpt2api.git`
 - Current custom branch: `main`
-- Current custom version: `1.7.0-image3.3`
+- Current custom version: `1.7.0-image3.4`
 - Image3 custom code baseline before this document was added: `e8c993c`
 - Old image2 version backup branch: `image2-before-image3-custom`
 - Existing older feature branch, not modified during image3 upload: `feature/sub2api-image-billing`
@@ -110,12 +110,13 @@ Third-party apps:
 
 Image model compatibility:
 
-- `gpt-image-2` is kept as a public compatibility model name, but image3 maps it
-  internally to `codex-gpt-image-2` to avoid the unstable ChatGPT web image
-  generation path.
-- Explicit client requests with `"model": "gpt-image-2"` therefore require an
-  available Codex-source image account, the same as direct
-  `codex-gpt-image-2` requests.
+- `gpt-image-2` and `codex-gpt-image-2` are separate public routes; image3 does
+  not map either model name to the other.
+- `gpt-image-2` uses the ChatGPT web image-generation path and may select normal
+  Web accounts, including eligible Free accounts.
+- `codex-gpt-image-2` uses `/backend-api/codex/responses` and selects Codex-source
+  Plus, Team, or Pro accounts unless an explicit plan-prefixed Codex model is
+  requested.
 - When Codex returns HTTP `429` with `error.type=usage_limit_reached`, image3
   marks that source account unavailable until the upstream `resets_at` time and
   retries the request with another eligible paid Codex account. Other 429
@@ -167,9 +168,12 @@ Billing:
   parsed max `size` side is greater than 1024 are scaled proportionally so the
   largest side is 1024 before billing and before upstream image generation.
   Missing, empty, or `auto` size is treated as 1K and left unchanged.
-- Default image generation/edit model is `codex-gpt-image-2` so omitted-model
-  requests and the web UI avoid the older ChatGPT web `gpt-image-2` path when
-  it does not trigger the upstream image tool.
+- Default image generation/edit model is `gpt-image-2` for synchronous APIs,
+  asynchronous image tasks, compatible chat/responses image requests, restored
+  conversations, and the web UI.
+- Clients that specifically require the Codex image tool or explicit 2K/4K size
+  forwarding should request `codex-gpt-image-2`; the ChatGPT web path does not
+  guarantee exact requested pixel dimensions.
 
 Price formula:
 

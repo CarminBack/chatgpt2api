@@ -63,8 +63,15 @@ class ImageTasksApiTests(unittest.TestCase):
     def setUp(self):
         self.fake_service = FakeImageTaskService()
         self.service_patcher = mock.patch.object(image_tasks_module, "image_task_service", self.fake_service)
+        self.identity_patcher = mock.patch.object(
+            image_tasks_module,
+            "require_identity",
+            return_value={"id": "admin", "name": "Admin", "role": "admin", "source": "local"},
+        )
         self.service_patcher.start()
+        self.identity_patcher.start()
         self.addCleanup(self.service_patcher.stop)
+        self.addCleanup(self.identity_patcher.stop)
         app = FastAPI()
         app.include_router(image_tasks_module.create_router())
         self.client = TestClient(app)
@@ -73,7 +80,7 @@ class ImageTasksApiTests(unittest.TestCase):
         response = self.client.post(
             "/api/image-tasks/generations",
             headers=AUTH_HEADERS,
-            json={"client_task_id": "task-1", "prompt": "cat", "model": "gpt-image-2"},
+            json={"client_task_id": "task-1", "prompt": "cat"},
         )
 
         self.assertEqual(response.status_code, 200, response.text)
@@ -81,13 +88,14 @@ class ImageTasksApiTests(unittest.TestCase):
         self.assertEqual(payload["id"], "task-1")
         self.assertEqual(payload["status"], "success")
         self.assertEqual(len(self.fake_service.generation_calls), 1)
+        self.assertEqual(self.fake_service.generation_calls[0][1]["model"], "gpt-image-2")
 
     def test_create_edit_task_accepts_multiple_images(self):
         """测试图片编辑任务接口支持多个上传图片。"""
         response = self.client.post(
             "/api/image-tasks/edits",
             headers=AUTH_HEADERS,
-            data={"client_task_id": "edit-1", "prompt": "edit", "model": "gpt-image-2"},
+            data={"client_task_id": "edit-1", "prompt": "edit"},
             files=[
                 ("image", ("one.png", b"one", "image/png")),
                 ("image", ("two.png", b"two", "image/png")),
@@ -97,6 +105,7 @@ class ImageTasksApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["id"], "edit-1")
         self.assertEqual(len(self.fake_service.edit_calls), 1)
+        self.assertEqual(self.fake_service.edit_calls[0][1]["model"], "gpt-image-2")
         images = self.fake_service.edit_calls[0][1]["images"]
         self.assertEqual(len(images), 2)
 

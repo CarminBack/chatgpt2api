@@ -12,6 +12,35 @@ import api.ai as ai_module
 
 
 class ImageBillingApiTests(unittest.TestCase):
+    def test_generation_omitted_model_uses_gpt_image_2(self) -> None:
+        identity = {"id": "admin", "name": "Admin", "role": "admin", "source": "local"}
+        payloads = []
+        app = FastAPI()
+        app.include_router(ai_module.create_router())
+        client = TestClient(app)
+
+        def fake_handle(payload):
+            payloads.append(payload)
+            return {"created": 1, "data": [{"b64_json": "ZmFrZQ=="}]}
+
+        with mock.patch.object(ai_module, "require_identity", return_value=identity), mock.patch.object(
+            ai_module,
+            "check_request",
+            return_value=None,
+        ), mock.patch.object(
+            ai_module.openai_v1_image_generations,
+            "handle",
+            side_effect=fake_handle,
+        ):
+            response = client.post(
+                "/v1/images/generations",
+                headers={"Authorization": "Bearer local-admin"},
+                json={"prompt": "cat"},
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(payloads[0]["model"], "gpt-image-2")
+
     def test_generation_exception_refunds_by_key_id_without_raw_key(self) -> None:
         identity = {
             "id": "sub2api:93",

@@ -56,13 +56,13 @@ const IMAGE_MODEL_STORAGE_KEY = "chatgpt2api:image_last_model";
 const IMAGE_COUNT_STORAGE_KEY = "chatgpt2api:image_last_count";
 const SCROLL_POSITIONS_STORAGE_KEY = "chatgpt2api:image_scroll_positions";
 const SCROLL_TO_LATEST_THRESHOLD = 160;
-const DEFAULT_IMAGE_MODEL: ImageModel = "codex-gpt-image-2";
+const DEFAULT_IMAGE_MODEL: ImageModel = "gpt-image-2";
 const IMAGE_MODEL_PRIORITY = [
+  "gpt-image-2",
   "codex-gpt-image-2",
   "plus-codex-gpt-image-2",
   "team-codex-gpt-image-2",
   "pro-codex-gpt-image-2",
-  "gpt-image-2",
 ];
 
 function loadScrollPositions(): Map<string, number> {
@@ -160,7 +160,7 @@ function filterImageModels(items: Model[]): ImageModel[] {
 
 function normalizeStoredImageModel(value: string | null, availableModels: ImageModel[]): ImageModel {
   const normalized = String(value || "").trim();
-  if (normalized && normalized !== "gpt-image-2" && availableModels.includes(normalized)) {
+  if (normalized && availableModels.includes(normalized)) {
     return normalized;
   }
   if (availableModels.includes(DEFAULT_IMAGE_MODEL)) {
@@ -709,7 +709,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         setImageModels(available);
         const storedModel = typeof window !== "undefined" ? window.localStorage.getItem(IMAGE_MODEL_STORAGE_KEY) : null;
         setImageModel((current) => {
-          if (current !== "gpt-image-2" && available.includes(current)) {
+          if (available.includes(current)) {
             return current;
           }
           return normalizeStoredImageModel(storedModel, available);

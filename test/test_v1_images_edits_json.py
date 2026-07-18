@@ -27,10 +27,17 @@ class ImageEditsJsonApiTests(unittest.TestCase):
 
         self.handle_patcher = mock.patch.object(ai_module.openai_v1_image_edit, "handle", fake_handle)
         self.filter_patcher = mock.patch.object(ai_module, "filter_or_log", mock.AsyncMock())
+        self.identity_patcher = mock.patch.object(
+            ai_module,
+            "require_identity",
+            return_value={"id": "admin", "name": "Admin", "role": "admin", "source": "local"},
+        )
         self.handle_patcher.start()
         self.filter_patcher.start()
+        self.identity_patcher.start()
         self.addCleanup(self.handle_patcher.stop)
         self.addCleanup(self.filter_patcher.stop)
+        self.addCleanup(self.identity_patcher.stop)
 
         app = FastAPI()
         app.include_router(ai_module.create_router())
@@ -39,7 +46,7 @@ class ImageEditsJsonApiTests(unittest.TestCase):
     def test_json_model_omitted_uses_existing_default_logic(self):
         response = self.client.post("/v1/images/edits", headers=AUTH_HEADERS, json={"prompt": "未传 model", "image": PNG_DATA_URL})
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(self.calls[0]["model"], "codex-gpt-image-2")
+        self.assertEqual(self.calls[0]["model"], "gpt-image-2")
 
     def test_json_model_is_not_overwritten_when_provided(self):
         response = self.client.post(
