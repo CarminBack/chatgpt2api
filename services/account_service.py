@@ -132,6 +132,8 @@ class AccountService:
     def _is_image_account_available(account: dict) -> bool:
         if not isinstance(account, dict):
             return False
+        if int(account.get("codex_usage_limit_resets_at") or 0) > int(time.time()):
+            return False
         if account.get("status") in {"禁用", "限流", "异常"}:
             return False
         if bool(account.get("image_quota_unknown")):
@@ -232,6 +234,9 @@ class AccountService:
         normalized["limits_progress"] = limits_progress if isinstance(limits_progress, list) else []
         normalized["default_model_slug"] = normalized.get("default_model_slug") or None
         normalized["restore_at"] = normalized.get("restore_at") or None
+        normalized["codex_usage_limit_resets_at"] = max(
+            0, int(normalized.get("codex_usage_limit_resets_at") or 0)
+        )
         normalized["success"] = int(normalized.get("success") or 0)
         normalized["fail"] = int(normalized.get("fail") or 0)
         normalized["invalid_count"] = int(normalized.get("invalid_count") or 0)
@@ -1280,6 +1285,30 @@ class AccountService:
                 )
                 return False
         return True
+
+    def mark_image_usage_limited(self, access_token: str, resets_at: object = None) -> dict | None:
+        if not access_token:
+            return None
+        self.release_image_slot(access_token)
+        with self._lock:
+            access_token = self._resolve_access_token_locked(access_token)
+            current = self._accounts.get(access_token)
+            if current is None:
+                return None
+            next_item = dict(current)
+            next_item["last_used_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            next_item["fail"] = int(next_item.get("fail") or 0) + 1
+            try:
+                reset_epoch = int(resets_at)
+            except (TypeError, ValueError):
+                reset_epoch = 0
+            next_item["codex_usage_limit_resets_at"] = reset_epoch if reset_epoch > int(time.time()) else int(time.time()) + 300
+            account = self._normalize_account(next_item)
+            if account is None:
+                return None
+            self._accounts[access_token] = account
+            self._save_accounts()
+            return dict(account)
 
     def mark_image_result(self, access_token: str, success: bool) -> dict | None:
         if not access_token:

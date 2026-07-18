@@ -69,6 +69,24 @@ class AccountCapabilityTests(unittest.TestCase):
             self.assertEqual(updated["status"], "正常")
             self.assertTrue(updated["image_quota_unknown"])
 
+    def test_mark_image_usage_limited_persists_reset_time(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
+            service.add_account_items([
+                {"access_token": "token-1", "type": "Plus", "status": "正常", "quota": 120}
+            ])
+
+            with patch("services.account_service.time.time", return_value=1784344802):
+                updated = service.mark_image_usage_limited("token-1", 1784780253)
+                is_available = service._is_image_account_available(updated or {})
+
+            self.assertIsNotNone(updated)
+            self.assertEqual(updated["status"], "正常")
+            self.assertEqual(updated["quota"], 120)
+            self.assertEqual(updated["codex_usage_limit_resets_at"], 1784780253)
+            self.assertFalse(is_available)
+            self.assertEqual(updated["fail"], 1)
+
     def test_split_image_model_supports_plan_type_prefix(self) -> None:
         self.assertEqual(split_image_model("gpt-image-2"), (None, "codex-gpt-image-2"))
         self.assertEqual(split_image_model("plus-codex-gpt-image-2"), ("plus", "codex-gpt-image-2"))

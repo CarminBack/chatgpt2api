@@ -17,6 +17,7 @@ from services.image_storage_service import image_storage_service
 from services.openai_backend_api import ImageContentPolicyError, ImagePollTimeoutError, OpenAIBackendAPI
 from utils.helper import (
     IMAGE_MODELS,
+    UpstreamHTTPError,
     extract_image_from_message_content,
     is_codex_image_model,
     is_supported_image_model,
@@ -102,6 +103,16 @@ def is_connection_timeout_error(message: str) -> bool:
         or "read timed out" in text
         or "connect timeout" in text
     )
+
+
+def codex_usage_limit_reset_at(error: Exception) -> object | None:
+    if not isinstance(error, UpstreamHTTPError) or error.status_code != 429:
+        return None
+    body = error.body if isinstance(error.body, dict) else {}
+    detail = body.get("error") if isinstance(body.get("error"), dict) else {}
+    if detail.get("type") != "usage_limit_reached":
+        return None
+    return detail.get("resets_at") or 0
 
 
 def image_stream_error_message(message: str) -> str:
@@ -1458,6 +1469,16 @@ def _generate_single_image(
             })
             raise
         except Exception as exc:
+            reset_at = codex_usage_limit_reset_at(exc) if codex_model and not emitted_for_token else None
+            if reset_at is not None:
+                account_service.mark_image_usage_limited(token, reset_at)
+                logger.warning({
+                    "event": "image_codex_usage_limit_retry",
+                    "account_email": account_email,
+                    "reset_at": reset_at or None,
+                    "index": index,
+                })
+                continue
             account_service.mark_image_result(token, False)
             last_error = str(exc)
             logger.warning({

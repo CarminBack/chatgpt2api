@@ -8,7 +8,7 @@ This document is the source of truth for the `image3.mewinyou.shop` custom build
 
 - GitHub fork: `git@github.com:CarminBack/chatgpt2api.git`
 - Current custom branch: `main`
-- Current custom version: `1.7.0-image3.1`
+- Current custom version: `1.7.0-image3.3`
 - Image3 custom code baseline before this document was added: `e8c993c`
 - Old image2 version backup branch: `image2-before-image3-custom`
 - Existing older feature branch, not modified during image3 upload: `feature/sub2api-image-billing`
@@ -116,6 +116,10 @@ Image model compatibility:
 - Explicit client requests with `"model": "gpt-image-2"` therefore require an
   available Codex-source image account, the same as direct
   `codex-gpt-image-2` requests.
+- When Codex returns HTTP `429` with `error.type=usage_limit_reached`, image3
+  marks that source account unavailable until the upstream `resets_at` time and
+  retries the request with another eligible paid Codex account. Other 429
+  responses are not treated as an exhausted weekly usage window.
 
 Token2 image entry:
 
