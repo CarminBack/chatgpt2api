@@ -341,6 +341,48 @@ class ImageTaskServiceTests(unittest.TestCase):
             self.assertEqual(seen_size, "1024x1024")
             self.assertEqual(task["size"], "1024x1024")
 
+    def test_key_policy_routes_async_task_and_forwards_observe_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            seen_payload: dict[str, object] = {}
+
+            def handler(payload):
+                seen_payload.update(payload)
+                return {"data": [{"url": "http://example.test/image.png"}]}
+
+            service = self.make_service(Path(tmp_dir) / "image_tasks.json", handler)
+            identity = {
+                "id": "canvas-key-id",
+                "name": "Canvas Channel 22",
+                "role": "user",
+                "source": "local",
+            }
+            with mock.patch.dict(
+                config.data,
+                {
+                    "image_key_policies": {
+                        "canvas-key-id": {
+                            "max_resolution_tier": "4k",
+                            "output_size_mode": "observe",
+                            "route_model": "codex-gpt-image-2",
+                        }
+                    }
+                },
+            ):
+                service.submit_generation(
+                    identity,
+                    client_task_id="canvas-4k",
+                    prompt="cat",
+                    model="gpt-image-2",
+                    size="3840x2160",
+                )
+                task = wait_for_task(service, identity, "canvas-4k", "success")
+
+            self.assertEqual(task["model"], "codex-gpt-image-2")
+            self.assertEqual(task["size"], "3840x2160")
+            self.assertEqual(seen_payload["model"], "codex-gpt-image-2")
+            self.assertEqual(seen_payload["_image_output_size_mode"], "observe")
+            self.assertEqual(seen_payload["_image_policy_identity_id"], "canvas-key-id")
+
 
 if __name__ == "__main__":
     unittest.main()

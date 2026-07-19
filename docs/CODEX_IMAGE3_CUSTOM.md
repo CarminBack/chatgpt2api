@@ -1,6 +1,6 @@
 # Codex Image3 Custom Maintenance Guide
 
-Last updated: 2026-07-18
+Last updated: 2026-07-19
 
 This document is the source of truth for the `image3.mewinyou.shop` custom build. If Codex receives only this document and repository access, it should understand what the custom behavior is, where it lives, how to update it, and how to verify it.
 
@@ -8,7 +8,7 @@ This document is the source of truth for the `image3.mewinyou.shop` custom build
 
 - GitHub fork: `git@github.com:CarminBack/chatgpt2api.git`
 - Current custom branch: `main`
-- Current custom version: `1.7.0-image3.4`
+- Current custom version: `1.7.0-image3.5`
 - Image3 custom code baseline before this document was added: `e8c993c`
 - Old image2 version backup branch: `image2-before-image3-custom`
 - Existing older feature branch, not modified during image3 upload: `feature/sub2api-image-billing`
@@ -51,6 +51,13 @@ Important runtime config keys:
   "sub2api_billing_allowed_group_ids": [12],
   "image_1k_only_sub2api_user_ids": [],
   "image_1k_only_sub2api_key_ids": [],
+  "image_key_policies": {
+    "<local-identity-id>": {
+      "max_resolution_tier": "4k",
+      "output_size_mode": "observe",
+      "route_model": "codex-gpt-image-2"
+    }
+  },
   "image_price_per_request": 0.1
 }
 ```
@@ -62,6 +69,7 @@ Environment variable alternatives:
 - `SUB2API_BILLING_ALLOWED_GROUP_IDS`
 - `IMAGE_1K_ONLY_SUB2API_USER_IDS`
 - `IMAGE_1K_ONLY_SUB2API_KEY_IDS`
+- `IMAGE_KEY_POLICIES` as a JSON object
 
 Current production policy:
 
@@ -174,6 +182,34 @@ Billing:
 - Clients that specifically require the Codex image tool or explicit 2K/4K size
   forwarding should request `codex-gpt-image-2`; the ChatGPT web path does not
   guarantee exact requested pixel dimensions.
+
+Per-key image policy:
+
+- `image_key_policies` matches the authenticated identity `id`, never a raw API
+  key. A local user key created by `/api/auth/users` has a stable random ID that
+  is safe to place in runtime configuration.
+- A policy can set `max_resolution_tier` to `1k`, `2k`, or `4k`. Requests beyond
+  the configured maximum receive HTTP `400`; they are not silently resized.
+  The limits are 1024 pixels / 1024² pixels, 2048 pixels / 2048² pixels, and
+  3840 pixels / 3840×2160 pixels respectively, so both 3840×2160 and
+  2160×3840 are accepted as 4K while 3840×3840 is rejected.
+- A policy can set `route_model`, for example `codex-gpt-image-2`, to override
+  the client model after authentication and before billing/account routing.
+- `output_size_mode=observe` inspects each returned image with Pillow and logs
+  requested and actual pixel dimensions under
+  `event=image_output_size_observed`. It does not resize, crop, retry, or change
+  the returned image. `passthrough` is the default and performs no inspection.
+- A 4K policy authorizes and forwards a 4K request but does not itself guarantee
+  that the upstream image tool will return exact 4K pixels. Use `observe` first
+  to measure actual behavior before adding any strict enforcement.
+- Identities without a matching policy keep their existing behavior. The legacy
+  `image_1k_only_sub2api_*` proportional downscaling remains unchanged and is
+  applied before the new maximum-tier check.
+- For Canvas/New API channel isolation, create a dedicated local image3 user
+  key, configure only that identity ID with a 4K/observe/Codex policy, and put
+  the one-time raw key only in the channel secret field. Do not attach the
+  policy to the legacy `admin` identity because every caller sharing the admin
+  key would inherit it.
 
 Price formula:
 
@@ -306,6 +342,9 @@ Primary custom files:
   - attaches image owner metadata for task-generated images
 - `services/image_access_policy.py`
   - token2 user/key 1K-only image size constraint
+  - authenticated identity ID policy, resolution-tier validation, and model routing
+- `services/image_output_size.py`
+  - observe-only requested/actual output dimension logging
 - `web/src/app/settings/components/image-access-policy-card.tsx`
   - admin settings panel for token2 user/key 1K-only lists
 - `web/src/app/settings/store.ts`
@@ -401,6 +440,9 @@ uv run pytest -q \
   test/test_sub2api_billing_service.py \
   test/test_image_billing_api.py \
   test/test_image_task_service.py \
+  test/test_image_access_policy.py \
+  test/test_image_output_size.py \
+  test/test_image_policy_propagation.py \
   test/test_image_tasks_api.py \
   test/test_register_proxy_runtime.py
 ```
@@ -411,6 +453,30 @@ Initialize or migrate the billing ledger after backing up token2 PostgreSQL:
 sudo docker exec chatgpt2api-image3 sh -lc \
   'cd /app && uv run python -c "from services.sub2api_billing_service import sub2api_billing_service; sub2api_billing_service.list_logs(limit=1)"'
 ```
+
+Check Canvas per-key policy without printing any raw key:
+
+```bash
+sudo docker exec chatgpt2api-image3 sh -lc 'cd /app && uv run python - <<PY
+from services.config import config
+print({identity_id: {
+  "max_resolution_tier": policy.get("max_resolution_tier"),
+  "output_size_mode": policy.get("output_size_mode"),
+  "route_model": policy.get("route_model"),
+} for identity_id, policy in config.image_key_policies.items()})
+PY'
+```
+
+For an observe-mode test, request the intended size once and check logs without
+printing request credentials:
+
+```bash
+sudo docker logs --since 10m chatgpt2api-image3 2>&1 | \
+  grep 'image_output_size_observed' | tail -n 5
+```
+
+Expected: the event contains the dedicated identity ID, requested dimensions,
+actual dimensions, and `exact_match`; the response image itself is unchanged.
 
 Check runtime config inside container:
 

@@ -595,6 +595,24 @@ class ConfigStore:
         return self._normalize_int_list(value)
 
     @property
+    def image_key_policies(self) -> dict[str, dict[str, object]]:
+        value: object = os.getenv("IMAGE_KEY_POLICIES")
+        if value is None:
+            value = self.data.get("image_key_policies")
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                return {}
+        if not isinstance(value, dict):
+            return {}
+        return {
+            str(identity_id).strip(): dict(policy)
+            for identity_id, policy in value.items()
+            if str(identity_id).strip() and isinstance(policy, dict)
+        }
+
+    @property
     def image_price_per_request(self) -> float:
         try:
             return max(0.0, float(self.data.get("image_price_per_request", 0)))
@@ -644,6 +662,7 @@ class ConfigStore:
         data["sub2api_billing_allowed_group_ids"] = self.sub2api_billing_allowed_group_ids
         data["image_1k_only_sub2api_user_ids"] = self.image_1k_only_sub2api_user_ids
         data["image_1k_only_sub2api_key_ids"] = self.image_1k_only_sub2api_key_ids
+        data["image_key_policies"] = self.image_key_policies
         data["image_price_per_request"] = self.image_price_per_request
         data.pop("sub2api_billing_dsn", None)
         data.pop("auth-key", None)

@@ -14,6 +14,7 @@ import tiktoken
 from services.account_service import account_service
 from services.config import config
 from services.image_storage_service import image_storage_service
+from services.image_output_size import observe_image_output_size
 from services.openai_backend_api import ImageContentPolicyError, ImagePollTimeoutError, OpenAIBackendAPI
 from utils.helper import (
     IMAGE_MODELS,
@@ -293,6 +294,10 @@ def format_image_result(
     message: str = "",
     owner_id: str = "",
     owner_name: str = "",
+    requested_size: str | None = None,
+    output_size_mode: str = "passthrough",
+    policy_identity_id: str = "",
+    model: str = "",
 ) -> dict[str, Any]:
     data: list[dict[str, Any]] = []
     for item in items:
@@ -300,11 +305,19 @@ def format_image_result(
         if not b64_json:
             continue
         revised_prompt = str(item.get("revised_prompt") or prompt).strip() or prompt
+        image_bytes = base64.b64decode(b64_json)
+        observe_image_output_size(
+            image_bytes,
+            requested_size=requested_size,
+            output_size_mode=output_size_mode,
+            identity_id=policy_identity_id,
+            model=model,
+        )
         if response_format == "b64_json":
             data.append({
                 "b64_json": b64_json,
                 "url": save_image_bytes(
-                    base64.b64decode(b64_json),
+                    image_bytes,
                     base_url,
                     owner_id=owner_id,
                     owner_name=owner_name,
@@ -314,7 +327,7 @@ def format_image_result(
         else:
             data.append({
                 "url": save_image_bytes(
-                    base64.b64decode(b64_json),
+                    image_bytes,
                     base_url,
                     owner_id=owner_id,
                     owner_name=owner_name,
@@ -343,6 +356,8 @@ class ConversationRequest:
     owner_name: str = ""
     message_as_error: bool = False
     progress_callback: Any = None  # Callable[[str], None] | None
+    output_size_mode: str = "passthrough"
+    policy_identity_id: str = ""
 
 
 @dataclass
@@ -1006,6 +1021,10 @@ def stream_image_outputs(
             int(time.time()),
             owner_id=request.owner_id,
             owner_name=request.owner_name,
+            requested_size=request.size,
+            output_size_mode=request.output_size_mode,
+            policy_identity_id=request.policy_identity_id,
+            model=request.model,
         )["data"]
         if data:
             _remove_image_conversation_later(backend, conversation_id)
@@ -1106,6 +1125,10 @@ def stream_image_outputs(
                         int(time.time()),
                         owner_id=request.owner_id,
                         owner_name=request.owner_name,
+                        requested_size=request.size,
+                        output_size_mode=request.output_size_mode,
+                        policy_identity_id=request.policy_identity_id,
+                        model=request.model,
                     )["data"]
                     if data:
                         _remove_image_conversation_later(backend, conversation_id)
@@ -1221,6 +1244,10 @@ def stream_image_outputs(
                     int(time.time()),
                     owner_id=request.owner_id,
                     owner_name=request.owner_name,
+                    requested_size=request.size,
+                    output_size_mode=request.output_size_mode,
+                    policy_identity_id=request.policy_identity_id,
+                    model=request.model,
                 )["data"]
                 if data:
                     _remove_image_conversation_later(backend, conversation_id)
@@ -1284,6 +1311,10 @@ def stream_codex_image_outputs(
         int(time.time()),
         owner_id=request.owner_id,
         owner_name=request.owner_name,
+        requested_size=request.size,
+        output_size_mode=request.output_size_mode,
+        policy_identity_id=request.policy_identity_id,
+        model=request.model,
     )["data"]
     if data:
         yield ImageOutput(kind="result", model=request.model, index=index, total=total, data=data)

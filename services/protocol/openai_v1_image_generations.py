@@ -23,6 +23,8 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
     owner_id = str(body.get("image_owner_id") or "").strip()
     owner_name = str(body.get("image_owner_name") or "").strip()
     progress_callback = body.get("progress_callback")
+    output_size_mode = str(body.get("_image_output_size_mode") or "passthrough")
+    policy_identity_id = str(body.get("_image_policy_identity_id") or "").strip()
     outputs = stream_image_outputs_with_pool(ConversationRequest(
         prompt=prompt,
         model=model,
@@ -35,6 +37,8 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
         owner_name=owner_name,
         message_as_error=True,
         progress_callback=progress_callback,
+        output_size_mode=output_size_mode,
+        policy_identity_id=policy_identity_id,
     ))
     if body.get("stream"):
         return stream_image_chunks(outputs)

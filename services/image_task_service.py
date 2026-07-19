@@ -11,7 +11,7 @@ from typing import Any
 
 from services.config import DATA_DIR, config
 from services.content_filter import request_text
-from services.image_access_policy import constrain_image_size
+from services.image_access_policy import apply_image_request_policy
 from services.log_service import LOG_TYPE_CALL, log_service
 from services.protocol import openai_v1_image_edit, openai_v1_image_generations
 from services.sub2api_billing_service import sub2api_billing_service
@@ -159,8 +159,7 @@ class ImageTaskService:
         quality: str = "auto",
         base_url: str = "",
     ) -> dict[str, Any]:
-        size = constrain_image_size(identity, size)
-        payload = {
+        payload = apply_image_request_policy(identity, {
             "prompt": prompt,
             "model": model,
             "n": 1,
@@ -170,7 +169,7 @@ class ImageTaskService:
             "base_url": base_url,
             "image_owner_id": _owner_id(identity),
             "image_owner_name": _clean(identity.get("name")),
-        }
+        })
         return self._submit(identity, client_task_id=client_task_id, mode="generate", payload=payload)
 
     def submit_edit(
@@ -186,8 +185,7 @@ class ImageTaskService:
         images: list[tuple[bytes, str, str]] | None = None,
         masks: list[tuple[bytes, str, str]] | None = None,
     ) -> dict[str, Any]:
-        size = constrain_image_size(identity, size)
-        payload = {
+        payload = apply_image_request_policy(identity, {
             "prompt": prompt,
             "images": images or [],
             "mask": masks or [],
@@ -199,7 +197,7 @@ class ImageTaskService:
             "base_url": base_url,
             "image_owner_id": _owner_id(identity),
             "image_owner_name": _clean(identity.get("name")),
-        }
+        })
         return self._submit(identity, client_task_id=client_task_id, mode="edit", payload=payload)
 
     def list_tasks(self, identity: dict[str, object], task_ids: list[str]) -> dict[str, Any]:
@@ -269,6 +267,8 @@ class ImageTaskService:
                 "model": _clean(payload.get("model"), "gpt-image-2"),
                 "size": _clean(payload.get("size")),
                 "quality": _clean(payload.get("quality"), "auto"),
+                "output_size_mode": _clean(payload.get("_image_output_size_mode"), "passthrough"),
+                "policy_identity_id": _clean(payload.get("_image_policy_identity_id")),
                 "created_at": now,
                 "updated_at": now,
                 "created_ts": time.time(),
@@ -493,6 +493,8 @@ class ImageTaskService:
                 "model": _clean(item.get("model"), "gpt-image-2"),
                 "size": _clean(item.get("size")),
                 "quality": _clean(item.get("quality"), "auto"),
+                "output_size_mode": _clean(item.get("output_size_mode"), "passthrough"),
+                "policy_identity_id": _clean(item.get("policy_identity_id")),
                 "created_at": _clean(item.get("created_at"), _now_iso()),
                 "updated_at": _clean(item.get("updated_at"), _clean(item.get("created_at"), _now_iso())),
                 "created_ts": item.get("created_ts"),
@@ -682,14 +684,19 @@ class ImageTaskService:
             # 获取 task 的原始 prompt（从 _public_task 的 mode 判断）
             with self._lock:
                 task = self._tasks.get(key)
-                quality = _clean(task.get("quality"), "auto") if task else "auto"
                 size = _clean(task.get("size")) if task else None
+                output_size_mode = _clean(task.get("output_size_mode"), "passthrough") if task else "passthrough"
+                policy_identity_id = _clean(task.get("policy_identity_id")) if task else ""
             data = format_image_result(
                 image_items,
                 "",  # prompt 已不重要，结果已经拿到了
                 "b64_json",
                 "",
                 int(time.time()),
+                requested_size=size,
+                output_size_mode=output_size_mode,
+                policy_identity_id=policy_identity_id,
+                model=model,
             )["data"]
             self._update_task(key, status=TASK_STATUS_SUCCESS, data=data, error="", duration_ms=int((time.time() - started) * 1000))
             self._log_call(
